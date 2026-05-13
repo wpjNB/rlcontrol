@@ -13,7 +13,7 @@ FOOT_GEOM_NAMES = ["FR", "FL", "RR", "RL"]
 HOME_QPOS = np.array([0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8])
 HOME_Z = 0.27
 
-
+# action observe space 几乎不变，reward和termination根据不同环境（你想要功能）定义
 class Go1BaseEnv(gym.Env):
     """Base environment for Go1 quadruped robot tasks.
 

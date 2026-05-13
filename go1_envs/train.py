@@ -13,6 +13,8 @@ import argparse
 import gymnasium as gym
 
 # Trigger env registration
+#   train.py 导入 → import go1_envs → __init__.py 执行 → register() 注册三个环境 →
+#   gym.make("Go1Balance-v0") 可用
 import go1_envs  # noqa: F401
 
 TASK_DEFAULTS = {
