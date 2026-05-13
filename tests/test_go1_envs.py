@@ -67,3 +67,41 @@ class TestGo1BalanceEnv:
             if term:
                 env.reset()
         env.close()
+
+
+class TestGo1WalkEnv:
+    """Tests for Go1WalkEnv."""
+
+    def _make_env(self):
+        from go1_envs.go1_walk import Go1WalkEnv
+        return Go1WalkEnv()
+
+    def test_env_passes_checker(self):
+        env = self._make_env()
+        check_env(env, skip_render_check=True)
+        env.close()
+
+    def test_obs_shape(self):
+        env = self._make_env()
+        obs, info = env.reset()
+        assert obs.shape == (39,)
+        env.close()
+
+    def test_reward_finite(self):
+        env = self._make_env()
+        env.reset()
+        for _ in range(100):
+            action = env.action_space.sample()
+            obs, reward, term, trunc, info = env.step(action)
+            assert np.isfinite(reward)
+            if term:
+                env.reset()
+        env.close()
+
+    def test_info_has_position(self):
+        env = self._make_env()
+        env.reset()
+        _, _, _, _, info = env.step(np.zeros(12, dtype=np.float32))
+        assert "x_pos" in info
+        assert "x_vel" in info
+        env.close()
