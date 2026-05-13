@@ -10,11 +10,11 @@ class BlackjackAgent:
     def __init__(
         self,
         env: gym.Env,
-        learning_rate: float,
-        initial_epsilon: float,
-        epsilon_decay: float,
-        final_epsilon: float,
-        discount_factor: float = 0.95,
+        learning_rate: float,       # 学习率 (α)，控制 Q 值每次更新的步长，越大收敛越快但越不稳定
+        initial_epsilon: float,     # 初始探索率，为 1.0 时完全随机探索
+        epsilon_decay: float,       # 每轮后 epsilon 的衰减量，逐步从探索转向利用
+        final_epsilon: float,       # 探索率下限，保证即使训练后期也保留少量随机探索
+        discount_factor: float = 0.95,  # 折扣因子 (γ)，衡量未来奖励的重要性，越接近 1 越重视长期回报
     ):
         self.env = env
         self.q_values = defaultdict(lambda: np.zeros(env.action_space.n))
@@ -112,14 +112,14 @@ def test_agent(agent, env, num_episodes=1000):
 
 
 if __name__ == "__main__":
-    learning_rate = 0.01
-    n_episodes = 100_000
-    start_epsilon = 1.0
-    epsilon_decay = start_epsilon / (n_episodes / 2)
-    final_epsilon = 0.1
+    learning_rate = 0.02               # 学习率：比原始 0.01 稍快，但不过于激进
+    n_episodes = 200_000               # 训练总回合数：比原始 10 万翻倍，充分探索状态空间
+    start_epsilon = 1.0                # 初始探索率：1.0 表示训练初期完全随机选择动作
+    epsilon_decay = start_epsilon / (n_episodes * 0.7)  # 衰减步长：在 70% 训练量后 epsilon 降为 0
+    final_epsilon = 0.05               # 最终探索率：5%，比原始 10% 更低
 
-    env = gym.make("Blackjack-v1", sab=False)
-    env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)
+    env = gym.make("Blackjack-v1", sab=False)  # sab=False 使用非 Sutton & Barto 规则（庄家 17 点停牌）
+    env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)  # 记录每回合奖励和长度用于绘图
 
     agent = BlackjackAgent(
         env=env,
@@ -127,6 +127,7 @@ if __name__ == "__main__":
         initial_epsilon=start_epsilon,
         epsilon_decay=epsilon_decay,
         final_epsilon=final_epsilon,
+        # discount_factor 默认 0.95，Blackjack 是短局游戏，适当折扣未来奖励
     )
 
     for episode in tqdm(range(n_episodes)):

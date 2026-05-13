@@ -262,3 +262,35 @@ if __name__ == "__main__":
     env.close()
     print(f"\n平均得分: {np.mean(test_scores):.1f} / 500")
     print(f"（满分 500，通常 200+ 算学会，400+ 算很好）")
+
+    # ====================== 6. 渲染可视化 ======================
+    # WSL2 需要先安装: sudo apt install python3-opengl xvfb
+    # 然后运行: DISPLAY=:0 python 03_dqn_cartpole.py
+    # 或者用 xvfb-run: xvfb-run python 03_dqn_cartpole.py
+    print("\n" + "=" * 50)
+    print("渲染可视化（关闭窗口结束）...")
+    print("=" * 50)
+
+    try:
+        env = gym.make("CartPole-v1", render_mode="human")
+        agent.epsilon = 0.0
+
+        for i in range(5):
+            state, _ = env.reset()
+            total_reward = 0
+            done = False
+            while not done:
+                action = agent.select_action(state)
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                total_reward += reward
+                state = next_state
+            print(f"  Render {i+1}: {total_reward:.0f}")
+
+        env.close()
+    except Exception as e:
+        print(f"渲染失败: {e}")
+        print("WSL2 环境下可能需要:")
+        print("  1. sudo apt install python3-opengl xvfb")
+        print("  2. 用 xvfb-run python 03_dqn_cartpole.py")
+        print("  3. 或者用 render_mode='rgb_array' 保存为视频")
