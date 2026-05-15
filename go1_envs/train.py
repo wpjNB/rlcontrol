@@ -26,9 +26,9 @@ TASK_DEFAULTS = {
 
 # Curriculum schedule: list of (difficulty, timesteps) pairs
 WALKV2_CURRICULUM = [
-    (0.3, 300_000),   # Phase 1: small forward commands, light penalties
-    (0.6, 400_000),   # Phase 2: medium commands
-    (1.0, 1_300_000), # Phase 3: full task
+    (0.3, 500_000),   # Phase 1: small forward commands, light penalties
+    (0.6, 1_000_000),   # Phase 2: medium commands
+    (1.0, 1_500_000), # Phase 3: full task
 ]
 
 TASK_ENV_IDS = {

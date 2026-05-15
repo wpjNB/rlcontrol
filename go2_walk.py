@@ -29,7 +29,7 @@ def main():
 
     # 3. 定义带有 PD 控制的步态生成器
     def update_control(t):
-        freq = 6.0      # 迈步频率
+        freq = 10.0      # 迈步频率
         thigh_amp = 0.5 # 大腿摆动幅度
         calf_amp = 0.3  # 小腿抬起幅度
 
@@ -38,7 +38,7 @@ def main():
         
         # ⭐ 新增：PD 控制器参数 (根据Go2的重量和动力学调校)
         kp = 50.0  # 比例系数（刚度，类似于弹簧多硬）
-        kd = 1.5   # 微分系数（阻尼，用于吸收震荡）
+        kd = 2   # 微分系数（阻尼，用于吸收震荡）
 
         for leg in range(4):
             phase = phases[leg]

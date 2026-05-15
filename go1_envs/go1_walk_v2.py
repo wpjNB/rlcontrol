@@ -3,6 +3,7 @@
 import numpy as np
 import mujoco
 from go1_envs.base import Go1BaseEnv, HOME_QPOS
+from go1_envs.gait import TrotGait
 
 SCENE_FILE = "go1_envs/scenes/flat_scene.xml"
 
@@ -86,9 +87,8 @@ class Go1WalkV2Env(Go1BaseEnv):
         # foot order: FR, FL, RR, RL  (matches FOOT_BODY_NAMES)
         self._foot_phase_offsets = np.array([0.0, 0.5, 0.5, 0.0])
 
-        # Reference gait trajectory amplitudes (offsets from HOME_QPOS)
-        # [hip, thigh, knee] per leg — hip stays near 0, thigh/knee swing
-        self._gait_amp = np.array([0.1, 0.3, 0.4, 0.1, 0.3, 0.4, 0.1, 0.3, 0.4, 0.1, 0.3, 0.4])
+        # Reference gait generator
+        self._gait_gen = TrotGait(freq=3.0, thigh_amp=0.25, calf_amp=0.2)
 
         # Reward scales
         self._scales = dict(
@@ -260,24 +260,13 @@ class Go1WalkV2Env(Go1BaseEnv):
         return (t % self._gait_period) / self._gait_period
 
     def _get_ref_joint_pos(self):
-        """Generate reference joint positions for current trot gait phase.
-
-        Returns 12d array of target joint angles that encode a trot gait.
-        The amplitude scales with commanded velocity magnitude.
-        """
-        phase = self._gait_phase()
-        cmd_speed = np.linalg.norm(self._command[:2])
-        # Scale amplitude: 0 at zero command, full at ~1.0 m/s
-        speed_scale = np.clip(cmd_speed / 1.0, 0.0, 1.0)
-
-        ref = HOME_QPOS.copy()
-        for i in range(12):
-            leg = i // 3  # 0=FR, 1=FL, 2=RR, 3=RL
-            foot_phase = (phase + self._foot_phase_offsets[leg]) % 1.0
-            # Sine wave: stance (0-0.55) → swing (0.55-1.0)
-            swing = np.sin(2 * np.pi * foot_phase)
-            ref[i] += self._gait_amp[i] * swing * speed_scale
-        return ref
+        """Generate reference joint positions using TrotGait generator."""
+        dt = self.frame_skip * self.model.opt.timestep
+        t = self._step_count * dt
+        vx = float(self._command[0])
+        vy = float(self._command[1])
+        yaw = float(self._command[2])
+        return self._gait_gen.step(t, vx=vx, vy=vy, yaw_rate=yaw)
 
     def _reward_contact_consistency(self):
         """Reward feet contact matching expected trot gait pattern."""
