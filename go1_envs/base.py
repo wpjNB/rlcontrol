@@ -1,10 +1,16 @@
 """Go1BaseEnv: Base class for Go1 quadruped robot environments."""
 
 import os
+from contextlib import contextmanager
 import numpy as np
 import mujoco
+import mujoco.viewer
 import gymnasium as gym
 from gymnasium import spaces
+
+@contextmanager
+def _noop_ctx():
+    yield
 
 # Foot geom IDs in the Go1 model (verified)
 FOOT_GEOM_NAMES = ["FR", "FL", "RR", "RL"]
@@ -42,6 +48,7 @@ class Go1BaseEnv(gym.Env):
 
         # Renderer for human/rgb_array modes
         self._renderer = None
+        self._viewer = None
 
         # Cache foot geom IDs
         self._foot_geom_ids = []
@@ -125,9 +132,11 @@ class Go1BaseEnv(gym.Env):
         # Apply action
         self.data.ctrl[:] = action
 
-        # Step simulation frame_skip times
-        for _ in range(self.frame_skip):
-            mujoco.mj_step(self.model, self.data)
+        # Step simulation frame_skip times (lock viewer to avoid data race)
+        ctx = self._viewer.lock() if self._viewer is not None else _noop_ctx()
+        with ctx:
+            for _ in range(self.frame_skip):
+                mujoco.mj_step(self.model, self.data)
 
         obs = self._get_obs()
         reward = self._get_reward(obs, action)
@@ -140,17 +149,19 @@ class Go1BaseEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Reset to home keyframe
-        mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        # Lock viewer to avoid data race during reset
+        ctx = self._viewer.lock() if self._viewer is not None else _noop_ctx()
+        with ctx:
+            mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
 
-        # Add noise to joint positions (not to body pose)
-        noise = self.np_random.uniform(
-            -self.reset_noise_scale, self.reset_noise_scale, size=12
-        ).astype(np.float64)
-        self.data.qpos[7:19] += noise
+            # Add noise to joint positions (not to body pose)
+            noise = self.np_random.uniform(
+                -self.reset_noise_scale, self.reset_noise_scale, size=12
+            ).astype(np.float64)
+            self.data.qpos[7:19] += noise
 
-        # Forward dynamics to compute contacts etc.
-        mujoco.mj_forward(self.model, self.data)
+            # Forward dynamics to compute contacts etc.
+            mujoco.mj_forward(self.model, self.data)
 
         obs = self._get_obs()
         info = self._get_info()
@@ -158,10 +169,12 @@ class Go1BaseEnv(gym.Env):
 
     def render(self):
         if self.render_mode == "human":
-            if self._renderer is None:
-                self._renderer = mujoco.Renderer(self.model)
-            self._renderer.update_scene(self.data)
-            self._renderer.render()
+            if self._viewer is None:
+                self._viewer = mujoco.viewer.launch_passive(
+                    self.model, self.data
+                )
+            if self._viewer.is_running():
+                self._viewer.sync()
         elif self.render_mode == "rgb_array":
             if self._renderer is None:
                 self._renderer = mujoco.Renderer(self.model)
@@ -169,6 +182,13 @@ class Go1BaseEnv(gym.Env):
             return self._renderer.render()
 
     def close(self):
+        if self._viewer is not None:
+            try:
+                if self._viewer.is_running():
+                    self._viewer.close()
+            except Exception:
+                pass
+            self._viewer = None
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None

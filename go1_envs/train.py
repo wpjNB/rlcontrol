@@ -1,14 +1,14 @@
 """Unified training entry point for Go1 environments.
 
 Usage:
-    python -m go1_envs.train balance [--timesteps N] [--n-envs N]
-    python -m go1_envs.train walk [--timesteps N] [--n-envs N]
-    python -m go1_envs.train jump [--timesteps N] [--n-envs N]
+    python -m go1_envs.train train <task> [--timesteps N] [--n-envs N]
     python -m go1_envs.train eval <task> [--model PATH]
     python -m go1_envs.train viz <task> [--model PATH]
+    python -m go1_envs.train record <task> [--model PATH] [--output FILE]
 """
 
 import argparse
+import os
 
 import gymnasium as gym
 
@@ -20,12 +20,14 @@ import go1_envs  # noqa: F401
 TASK_DEFAULTS = {
     "balance": {"timesteps": 300_000, "save_path": "go1_balance_ppo"},
     "walk": {"timesteps": 500_000, "save_path": "go1_walk_ppo"},
+    "walkv2": {"timesteps": 2_000_000, "save_path": "go1_walkv2_ppo"},
     "jump": {"timesteps": 800_000, "save_path": "go1_jump_ppo"},
 }
 
 TASK_ENV_IDS = {
     "balance": "Go1Balance-v0",
     "walk": "Go1Walk-v0",
+    "walkv2": "Go1Walk-v1",
     "jump": "Go1Jump-v0",
 }
 
@@ -39,8 +41,10 @@ def make_vec_env(task: str, n_envs: int = 1, render_mode=None):
     """Create vectorized env with normalization."""
     from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
     if n_envs == 1:
-        env = make_env(task, render_mode=render_mode)
+        env = DummyVecEnv([lambda: make_env(task, render_mode=render_mode)])
     else:
         env = SubprocVecEnv([lambda: make_env(task) for _ in range(n_envs)])
 
@@ -105,31 +109,87 @@ def train(task: str, timesteps: int, n_envs: int = 8):
 def evaluate(task: str, model_path: str, num_episodes: int = 10):
     """Evaluate a trained model."""
     from stable_baselines3 import PPO
-    from stable_baselines3.common.evaluation import evaluate_policy
     from stable_baselines3.common.vec_env import VecNormalize
 
+    import os
     env = make_vec_env(task, n_envs=1)
-    env = VecNormalize.load(f"{model_path}/../vec_normalize.pkl", env)
+    vec_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
+    env = VecNormalize.load(vec_path, env)
     env.training = False
     model = PPO.load(model_path, env=env)
 
-    mean_reward, std_reward = evaluate_policy(
-        model, env, n_eval_episodes=num_episodes, deterministic=True
-    )
-    print(f"Evaluation ({num_episodes} episodes): {mean_reward:.1f} +/- {std_reward:.1f}")
+    # Manual evaluation to inspect reward terms
+    all_rewards = []
+    all_lengths = []
+    for ep in range(num_episodes):
+        obs = env.reset()
+        ep_reward = 0
+        ep_len = 0
+        done = False
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, info = env.step(action)
+            ep_reward += reward[0]
+            ep_len += 1
+            if ep_len >= 1000:
+                break
+        all_rewards.append(ep_reward)
+        all_lengths.append(ep_len)
+        print(f"  Episode {ep+1}: reward={ep_reward:.2f}, length={ep_len}")
+
+    import numpy as np
+    print(f"\nEvaluation ({num_episodes} episodes): "
+          f"{np.mean(all_rewards):.1f} +/- {np.std(all_rewards):.1f} | "
+          f"avg length: {np.mean(all_lengths):.0f}")
     env.close()
 
 
 def visualize(task: str, model_path: str, num_episodes: int = 3):
-    """Visualize a trained model."""
+    """Visualize a trained model (requires display)."""
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import VecNormalize
 
-    env = make_vec_env(task, n_envs=1, render_mode="human")
-    env = VecNormalize.load(f"{model_path}/../vec_normalize.pkl", env)
+    import time
+    # Raw env for rendering
+    raw_env = make_env(task, render_mode="human")
+    # VecEnv for model inference with normalization
+    vec_env = make_vec_env(task, n_envs=1)
+    vec_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
+    vec_env = VecNormalize.load(vec_path, vec_env)
+    vec_env.training = False
+    model = PPO.load(model_path, env=vec_env)
+
+    for ep in range(num_episodes):
+        raw_obs, _ = raw_env.reset()
+        vec_env.reset()
+        total_reward = 0
+        done = False
+        while not done:
+            obs = vec_env.normalize_obs(raw_obs.reshape(1, -1))
+            action, _ = model.predict(obs, deterministic=True)
+            raw_obs, reward, terminated, truncated, _ = raw_env.step(action[0])
+            vec_env.step(action)
+            done = terminated or truncated
+            total_reward += reward
+            raw_env.render()
+        print(f"Episode {ep + 1}: Reward = {total_reward:.1f}")
+    raw_env.close()
+    vec_env.close()
+
+
+def record(task: str, model_path: str, num_episodes: int = 1, output: str = "eval.mp4"):
+    """Record evaluation video (no display needed)."""
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.vec_env import VecNormalize
+    import imageio
+
+    env = make_vec_env(task, n_envs=1, render_mode="rgb_array")
+    vec_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
+    env = VecNormalize.load(vec_path, env)
     env.training = False
     model = PPO.load(model_path, env=env)
 
+    frames = []
     for ep in range(num_episodes):
         obs = env.reset()
         total_reward = 0
@@ -138,7 +198,14 @@ def visualize(task: str, model_path: str, num_episodes: int = 3):
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, _ = env.step(action)
             total_reward += reward[0]
+            frame = env.render()
+            if frame is not None:
+                frames.append(frame)
         print(f"Episode {ep + 1}: Reward = {total_reward:.1f}")
+
+    if frames:
+        imageio.mimsave(output, frames, fps=20)
+        print(f"\nVideo saved to {output} ({len(frames)} frames)")
     env.close()
 
 
@@ -162,7 +229,14 @@ def main():
     viz_parser = subparsers.add_parser("viz")
     viz_parser.add_argument("task", choices=TASK_DEFAULTS.keys())
     viz_parser.add_argument("--model", type=str, default=None)
-    viz_parser.add_argument("--episodes", type=int, default=3)
+    viz_parser.add_argument("--episodes", type=int, default=1000)
+
+    # Record video
+    rec_parser = subparsers.add_parser("record")
+    rec_parser.add_argument("task", choices=TASK_DEFAULTS.keys())
+    rec_parser.add_argument("--model", type=str, default=None)
+    rec_parser.add_argument("--episodes", type=int, default=1)
+    rec_parser.add_argument("--output", type=str, default="eval.mp4")
 
     args = parser.parse_args()
 
@@ -172,11 +246,21 @@ def main():
     elif args.command == "eval":
         save_path = TASK_DEFAULTS[args.task]["save_path"]
         model_path = args.model or f"./{save_path}/best_model"
+        if not os.path.dirname(model_path):
+            model_path = f"./{save_path}/{model_path}"
         evaluate(args.task, model_path, args.episodes)
     elif args.command == "viz":
         save_path = TASK_DEFAULTS[args.task]["save_path"]
         model_path = args.model or f"./{save_path}/best_model"
+        if not os.path.dirname(model_path):
+            model_path = f"./{save_path}/{model_path}"
         visualize(args.task, model_path, args.episodes)
+    elif args.command == "record":
+        save_path = TASK_DEFAULTS[args.task]["save_path"]
+        model_path = args.model or f"./{save_path}/best_model"
+        if not os.path.dirname(model_path):
+            model_path = f"./{save_path}/{model_path}"
+        record(args.task, model_path, args.episodes, args.output)
     else:
         parser.print_help()
 

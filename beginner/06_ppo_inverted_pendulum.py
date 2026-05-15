@@ -673,20 +673,20 @@ def compare_with_sb3():
     env = gym.make("InvertedPendulum-v4")
 
     model = PPO(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,          # 对应我们的 config.lr
-        n_steps=2048,                # 对应我们的 config.rollout_steps
-        batch_size=64,               # 对应我们的 config.batch_size
-        n_epochs=10,                 # 对应我们的 config.num_epochs
-        gamma=0.99,                  # 对应我们的 config.gamma
-        gae_lambda=0.95,             # 对应我们的 config.gae_lambda
-        clip_range=0.2,              # 对应我们的 config.clip_epsilon
-        ent_coef=0.01,               # 对应我们的 config.entropy_coef
-        vf_coef=0.5,                 # 对应我们的 config.value_coef
-        max_grad_norm=0.5,           # 对应我们的 config.max_grad_norm
-        verbose=0,
-        seed=42,
+        "MlpPolicy",                  # 策略网络: 3层MLP (64→64), 同时输出策略和价值
+        env,                          # 训练环境
+        learning_rate=3e-4,           # Adam优化器学习率, 控制每步参数更新幅度
+        n_steps=2048,                 # 每次收集的步数(rollout长度), 收集完才更新一次策略
+        batch_size=64,                # 每个epoch拆成多少样本一组做梯度更新
+        n_epochs=10,                  # 每次收集的数据重复训练几轮(epoch)
+        gamma=0.99,                   # 折扣因子γ, 越接近1越重视远期奖励
+        gae_lambda=0.95,              # GAE的λ, 控制偏差-方差权衡(越高方差越大但偏差越小)
+        clip_range=0.2,               # PPO裁剪范围ε, 限制新旧策略比在[1-ε, 1+ε]内
+        ent_coef=0.01,                # 熵正则系数, 鼓励探索(越大越随机)
+        vf_coef=0.5,                  # 价值函数loss的权重, 与策略loss加权求和
+        max_grad_norm=0.5,            # 梯度裁剪阈值, 防止梯度爆炸
+        verbose=0,                    # 日志级别: 0=静默, 1=训练信息, 2=调试信息
+        seed=42,                      # 随机种子, 保证可复现
     )
 
     print("SB3 PPO 训练中...")

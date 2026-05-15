@@ -19,3 +19,9 @@ register(
     entry_point="go1_envs.go1_jump:Go1JumpEnv",
     max_episode_steps=1000,
 )
+
+register(
+    id="Go1Walk-v1",
+    entry_point="go1_envs.go1_walk_v2:Go1WalkV2Env",
+    max_episode_steps=1000,
+)
