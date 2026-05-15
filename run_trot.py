@@ -60,30 +60,32 @@ TAU = 0.3           # 速度渐变时间常数 (s)，越大加速越慢
 class KeyState:
     """键盘按键状态追踪器。
 
-    追踪哪些键当前被按住。每帧通过 is_pressed() 查询按键状态，
-    用于计算目标速度。支持 press/release 检测。
+    MuJoCo 的 launch_passive 的 key_callback 只传 (key) 一个参数，
+    不支持检测松开事件。因此采用"锁定"方案：
+    - 按下某个方向键后，该键保持"激活"状态
+    - 按 SPACE 急停清除所有方向键
+    - 按 R 重置仿真
+
+    操作方式：按 UP 开始前进，按 SPACE 停止。
     """
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._pressed = set()   # 当前被按住的键集合
-        self.reset = False      # 重置标志（一次性）
+        self._pressed = set()   # 当前激活的方向键
+        self.reset = False
 
-    def on_key(self, key: int, action: int, mods: int):
+    def on_key(self, key: int):
         """GLFW 键盘回调函数。传给 launch_passive(key_callback=...)。"""
         with self._lock:
-            if action == GLFW_PRESS:
-                if key == GLFW_KEY_R:
-                    self.reset = True
-                elif key == GLFW_KEY_SPACE:
-                    self._pressed.clear()   # 急停：清除所有按键
-                else:
-                    self._pressed.add(key)
-            elif action == GLFW_RELEASE:
-                self._pressed.discard(key)
+            if key == GLFW_KEY_R:
+                self.reset = True
+            elif key == GLFW_KEY_SPACE:
+                self._pressed.clear()   # 急停：清除所有方向键
+            else:
+                self._pressed.add(key)  # 锁定该键
 
     def is_pressed(self, key: int) -> bool:
-        """查询某个键是否当前被按住。"""
+        """查询某个方向键是否处于激活状态。"""
         with self._lock:
             return key in self._pressed
 
@@ -143,7 +145,7 @@ def main():
     yaw = 0.0
 
     print("Go2 Trot 步态 — 笛卡尔空间 IK 传统控制")
-    print("操作: UP/DOWN=前后  LEFT/RIGHT=转向  Q/E=侧移  SPACE=急停  R=重置")
+    print("操作: UP=前进  DOWN=后退  LEFT=左转  RIGHT=右转  Q=左移  E=右移  SPACE=急停  R=重置")
 
     with mujoco.viewer.launch_passive(model, data, key_callback=keys.on_key) as viewer:
         mujoco.mj_resetDataKeyframe(model, data, 0)
