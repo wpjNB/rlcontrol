@@ -3,10 +3,12 @@ from stable_baselines3 import PPO
 
 def main():
     env=gym.make("CartPole-v1")
-    model = PPO("MlpPolicy", env, verbose=1)
+
     #训练模型
+    # model = PPO("MlpPolicy", env, verbose=1)
     # model.learn(total_timesteps=20000, progress_bar=True)
     # model.save("ppo_cartpole")
+    
     # 加载预训练模
     model = PPO.load("ppo_cartpole")
     test_model(model)

@@ -20,16 +20,15 @@ import go1_envs  # noqa: F401
 TASK_DEFAULTS = {
     "balance": {"timesteps": 300_000, "save_path": "go1_balance_ppo"},
     "walk": {"timesteps": 500_000, "save_path": "go1_walk_ppo"},
-    "walkv2": {"timesteps": 2_000_000, "save_path": "go1_walkv2_ppo"},
+    "walkv2": {"timesteps": 200_000, "save_path": "go1_walkv2_ppo"},
     "jump": {"timesteps": 800_000, "save_path": "go1_jump_ppo"},
 }
 
 # Curriculum schedule: list of (difficulty, timesteps) pairs
 WALKV2_CURRICULUM = [
-    (0.0, 300_000),   # Phase 1: stand still, light penalties
-    (0.3, 300_000),   # Phase 2: small commands, moderate penalties
-    (0.6, 400_000),   # Phase 3: medium commands
-    (1.0, 1_000_000), # Phase 4: full task
+    (0.3, 300_000),   # Phase 1: small forward commands, light penalties
+    (0.6, 400_000),   # Phase 2: medium commands
+    (1.0, 1_300_000), # Phase 3: full task
 ]
 
 TASK_ENV_IDS = {
@@ -40,10 +39,16 @@ TASK_ENV_IDS = {
 }
 
 
+class _DifficultyForwarder(gym.Wrapper):
+    """Forward set_difficulty to the underlying env."""
+    def set_difficulty(self, d):
+        self.env.unwrapped.set_difficulty(d)
+
 def make_env(task: str, render_mode=None, difficulty=1.0):
     """Create a single env instance."""
     import go1_envs  # noqa: F401 ensure registration in subprocesses
-    return gym.make(TASK_ENV_IDS[task], render_mode=render_mode, difficulty=difficulty)
+    env = gym.make(TASK_ENV_IDS[task], render_mode=render_mode, difficulty=difficulty)
+    return _DifficultyForwarder(env)
 
 
 def make_vec_env(task: str, n_envs: int = 1, render_mode=None, difficulty=1.0):
@@ -62,17 +67,17 @@ def make_vec_env(task: str, n_envs: int = 1, render_mode=None, difficulty=1.0):
 
 def _set_vec_env_difficulty(vec_env, difficulty: float):
     """Update difficulty on all sub-envs of a VecEnv."""
-    for env in vec_env.envs:
-        if hasattr(env, "set_difficulty"):
-            env.set_difficulty(difficulty)
-        elif hasattr(env, "env") and hasattr(env.env, "set_difficulty"):
-            env.env.set_difficulty(difficulty)
+    vec_env.env_method("set_difficulty", difficulty)
 
 
-def train_curriculum(task: str, curriculum=None, n_envs: int = 8):
-    """Train walkv2 with curriculum: gradually increase difficulty."""
+def train_curriculum(task: str, curriculum=None, n_envs: int = 8, resume: bool = False):
+    """Train walkv2 with curriculum: gradually increase difficulty.
+
+    If resume=True, load the existing model and continue from the last phase.
+    """
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import EvalCallback
+    from stable_baselines3.common.vec_env import VecNormalize
 
     if curriculum is None:
         curriculum = WALKV2_CURRICULUM
@@ -85,22 +90,45 @@ def train_curriculum(task: str, curriculum=None, n_envs: int = 8):
     train_env = make_vec_env(task, n_envs=n_envs, difficulty=d0)
     eval_env = make_vec_env(task, n_envs=1, render_mode="human", difficulty=d0)
 
-    model = PPO(
-        "MlpPolicy",
-        train_env,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=512,
-        n_epochs=5,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.001,
-        vf_coef=0.5,
-        max_grad_norm=0.5,
-        verbose=1,
-        seed=42,
-    )
+    if resume:
+        model_file = f"{save_path}/final_model.zip"
+        vec_file = f"{save_path}/vec_normalize.pkl"
+        if not os.path.exists(model_file):
+            print(f"Error: model not found at {model_file}")
+            return
+        if not os.path.exists(vec_file):
+            print(f"Error: vec_normalize not found at {vec_file}")
+            return
+
+        # Reload envs with saved normalization
+        train_env.close()
+        eval_env.close()
+        train_env = VecNormalize.load(vec_file, make_vec_env(task, n_envs=n_envs, difficulty=d0))
+        eval_env = VecNormalize.load(vec_file, make_vec_env(task, n_envs=1, render_mode="human", difficulty=d0))
+        train_env.training = True
+        eval_env.training = False
+
+        model = PPO.load(model_file, env=train_env)
+        prev_ts = model.num_timesteps
+        print(f"Resumed from {model_file} (previous timesteps: {prev_ts:,})")
+    else:
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=512,
+            n_epochs=5,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=0.001,
+            vf_coef=0.5,
+            max_grad_norm=0.5,
+            verbose=1,
+            seed=42,
+        )
+        prev_ts = 0
 
     eval_callback = EvalCallback(
         eval_env,
@@ -114,7 +142,7 @@ def train_curriculum(task: str, curriculum=None, n_envs: int = 8):
     print(f"Curriculum training for {task}:")
     for i, (d, ts) in enumerate(curriculum):
         print(f"  Phase {i+1}: difficulty={d:.1f}, timesteps={ts:,}")
-    print(f"  Total: {total_ts:,} steps")
+    print(f"  Total: {total_ts:,} steps (+ previous {prev_ts:,})")
     print(f"  Save path: ./{save_path}/")
     print("-" * 60)
 
@@ -125,10 +153,10 @@ def train_curriculum(task: str, curriculum=None, n_envs: int = 8):
         _set_vec_env_difficulty(eval_env, d)
 
         model.learn(
-            total_timesteps=trained_ts + ts,
+            total_timesteps=prev_ts + trained_ts + ts,
             callback=eval_callback,
             progress_bar=True,
-            reset_num_timesteps=(i == 0),
+            reset_num_timesteps=False if resume else (i == 0),
         )
         trained_ts += ts
 
@@ -140,32 +168,56 @@ def train_curriculum(task: str, curriculum=None, n_envs: int = 8):
     eval_env.close()
 
 
-def train(task: str, timesteps: int, n_envs: int = 8):
-    """Train a PPO agent on the specified task."""
+def train(task: str, timesteps: int, n_envs: int = 8, resume: bool = False):
+    """Train a PPO agent on the specified task.
+
+    If resume=True, load the existing model and vec_normalize from save_path
+    and continue training for additional timesteps.
+    """
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import EvalCallback
+    from stable_baselines3.common.vec_env import VecNormalize
 
     save_path = TASK_DEFAULTS[task]["save_path"]
 
-    train_env = make_vec_env(task, n_envs=n_envs)
-    eval_env = make_vec_env(task, n_envs=1, render_mode="human")
+    if resume:
+        model_file = f"{save_path}/final_model.zip"
+        vec_file = f"{save_path}/vec_normalize.pkl"
+        if not os.path.exists(model_file):
+            print(f"Error: model not found at {model_file}")
+            return
+        if not os.path.exists(vec_file):
+            print(f"Error: vec_normalize not found at {vec_file}")
+            return
 
-    model = PPO(
-        "MlpPolicy",
-        train_env,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=512,
-        n_epochs=5,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.001,
-        vf_coef=0.5,
-        max_grad_norm=0.5,
-        verbose=1,
-        seed=42,
-    )
+        train_env = VecNormalize.load(vec_file, make_vec_env(task, n_envs=n_envs))
+        eval_env = VecNormalize.load(vec_file, make_vec_env(task, n_envs=1, render_mode="human"))
+        train_env.training = True
+        eval_env.training = False
+
+        model = PPO.load(model_file, env=train_env)
+        print(f"Resumed from {model_file}")
+        print(f"Previous timesteps: {model.num_timesteps:,}")
+    else:
+        train_env = make_vec_env(task, n_envs=n_envs)
+        eval_env = make_vec_env(task, n_envs=1, render_mode="human")
+
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=512,
+            n_epochs=5,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=0.001,
+            vf_coef=0.5,
+            max_grad_norm=0.5,
+            verbose=1,
+            seed=42,
+        )
 
     eval_callback = EvalCallback(
         eval_env,
@@ -181,9 +233,10 @@ def train(task: str, timesteps: int, n_envs: int = 8):
     print("-" * 60)
 
     model.learn(
-        total_timesteps=timesteps,
+        total_timesteps=model.num_timesteps + timesteps,
         callback=eval_callback,
         progress_bar=True,
+        reset_num_timesteps=not resume,
     )
 
     model.save(f"{save_path}/final_model")
@@ -305,10 +358,12 @@ def main():
     train_parser.add_argument("task", choices=TASK_DEFAULTS.keys())
     train_parser.add_argument("--timesteps", type=int, default=None)
     train_parser.add_argument("--n-envs", type=int, default=8)
+    train_parser.add_argument("--resume", action="store_true", help="Resume training from saved model")
 
     # Curriculum train (walkv2 only)
     curr_parser = subparsers.add_parser("curriculum")
     curr_parser.add_argument("--n-envs", type=int, default=8)
+    curr_parser.add_argument("--resume", action="store_true", help="Resume curriculum from saved model")
 
     # Eval
     eval_parser = subparsers.add_parser("eval")
@@ -333,9 +388,9 @@ def main():
 
     if args.command == "train":
         timesteps = args.timesteps or TASK_DEFAULTS[args.task]["timesteps"]
-        train(args.task, timesteps, args.n_envs)
+        train(args.task, timesteps, args.n_envs, resume=args.resume)
     elif args.command == "curriculum":
-        train_curriculum("walkv2", n_envs=args.n_envs)
+        train_curriculum("walkv2", n_envs=args.n_envs, resume=args.resume)
     elif args.command == "eval":
         save_path = TASK_DEFAULTS[args.task]["save_path"]
         model_path = args.model or f"./{save_path}/best_model"

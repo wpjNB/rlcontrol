@@ -1,27 +1,41 @@
-"""Visualize Go1 environment with random actions using MuJoCo viewer."""
+"""Visualize trained Go1WalkV2 model using MuJoCo viewer."""
 
-import time
 import numpy as np
-import mujoco
-import mujoco.viewer
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import VecNormalize
 
 import gymnasium as gym
 import go1_envs  # noqa: F401 to register environments
 
-env = gym.make("Go1Walk-v1", render_mode="human")
-obs, info = env.reset()
+MODEL_DIR = "go1_walkv2_ppo"
 
-done=False
-reward_sum = 0.0
+# Raw env for rendering
+raw_env = gym.make("Go1Walk-v1", render_mode="human")
+# VecEnv for model inference with normalization
+from stable_baselines3.common.env_util import make_vec_env as sb3_make_vec_env
+vec_env = sb3_make_vec_env(lambda: gym.make("Go1Walk-v1"), n_envs=1)
+vec_env = VecNormalize.load(f"{MODEL_DIR}/vec_normalize.pkl", vec_env)
+vec_env.training = False
+
+model = PPO.load(f"{MODEL_DIR}/best_model", env=vec_env)
+
+num_episodes = 1000
 try:
-    for _ in range(2000):
-        action = env.action_space.sample()
-        obs, reward, terminated, truncated, _ = env.step(action)
-        done = terminated or truncated
-        reward_sum += reward
-        if done:
-            print(reward_sum)
-            reward_sum = 0.0
-            obs, _ = env.reset()
+    for ep in range(num_episodes):
+        raw_obs, _ = raw_env.reset()
+        vec_env.reset()
+        total_reward = 0
+        steps = 0
+        done = False
+        while not done:
+            obs = vec_env.normalize_obs(raw_obs.reshape(1, -1))
+            action, _ = model.predict(obs, deterministic=True)
+            raw_obs, reward, terminated, truncated, _ = raw_env.step(action[0])
+            vec_env.step(action)
+            done = terminated or truncated
+            total_reward += reward
+            steps += 1
+        print(f"Episode {ep + 1}: 存活 {steps} 步, Reward = {total_reward:.1f}")
 finally:
-    env.close()
+    raw_env.close()
+    vec_env.close()

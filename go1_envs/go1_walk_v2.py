@@ -44,11 +44,12 @@ class Go1WalkV2Env(Go1BaseEnv):
         collision_scale=-0.5,
         termination_scale=-2.0,
         dof_pos_limits_scale=-1.0,
-        feet_air_time_scale=1.0,
-        stumble_scale=-1.0,
+        feet_air_time_scale=2.0,
+        stumble_scale=-2.0,
         stand_still_scale=-0.5,
         feet_contact_forces_scale=-0.001,
-        contact_consistency_scale=1.0,
+        contact_consistency_scale=2.0,
+        ref_tracking_scale=5.0,
         # tracking sigma
         tracking_sigma=0.25,
         **kwargs,
@@ -85,6 +86,10 @@ class Go1WalkV2Env(Go1BaseEnv):
         # foot order: FR, FL, RR, RL  (matches FOOT_BODY_NAMES)
         self._foot_phase_offsets = np.array([0.0, 0.5, 0.5, 0.0])
 
+        # Reference gait trajectory amplitudes (offsets from HOME_QPOS)
+        # [hip, thigh, knee] per leg — hip stays near 0, thigh/knee swing
+        self._gait_amp = np.array([0.1, 0.3, 0.4, 0.1, 0.3, 0.4, 0.1, 0.3, 0.4, 0.1, 0.3, 0.4])
+
         # Reward scales
         self._scales = dict(
             tracking_lin_vel=tracking_lin_vel_scale,
@@ -105,12 +110,13 @@ class Go1WalkV2Env(Go1BaseEnv):
             stand_still=stand_still_scale,
             feet_contact_forces=feet_contact_forces_scale,
             contact_consistency=contact_consistency_scale,
+            ref_tracking=ref_tracking_scale,
         )
         self._tracking_sigma = tracking_sigma
 
-        # Override obs space: 39 + 3 (commanded_vel) + 2 (gait phase sin/cos)
+        # Override obs space: 39 + 3 (commanded_vel) + 2 (gait phase) + 12 (ref joints)
         from gymnasium import spaces
-        obs_dim = 44
+        obs_dim = 56
         high = np.inf * np.ones(obs_dim, dtype=np.float32)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
@@ -121,7 +127,8 @@ class Go1WalkV2Env(Go1BaseEnv):
         cmd = self._command.astype(np.float32)
         phase = self._gait_phase()
         phase_enc = np.array([np.sin(2 * np.pi * phase), np.cos(2 * np.pi * phase)], dtype=np.float32)
-        return np.concatenate([base_obs, cmd, phase_enc])
+        ref_joints = self._get_ref_joint_pos().astype(np.float32)  # 12d
+        return np.concatenate([base_obs, cmd, phase_enc, ref_joints])
 
     def set_command(self, vx: float = 0.0, vy: float = 0.0, yaw_rate: float = 0.0):
         self._command[:] = [vx, vy, yaw_rate]
@@ -252,6 +259,26 @@ class Go1WalkV2Env(Go1BaseEnv):
         t = self._step_count * dt
         return (t % self._gait_period) / self._gait_period
 
+    def _get_ref_joint_pos(self):
+        """Generate reference joint positions for current trot gait phase.
+
+        Returns 12d array of target joint angles that encode a trot gait.
+        The amplitude scales with commanded velocity magnitude.
+        """
+        phase = self._gait_phase()
+        cmd_speed = np.linalg.norm(self._command[:2])
+        # Scale amplitude: 0 at zero command, full at ~1.0 m/s
+        speed_scale = np.clip(cmd_speed / 1.0, 0.0, 1.0)
+
+        ref = HOME_QPOS.copy()
+        for i in range(12):
+            leg = i // 3  # 0=FR, 1=FL, 2=RR, 3=RL
+            foot_phase = (phase + self._foot_phase_offsets[leg]) % 1.0
+            # Sine wave: stance (0-0.55) → swing (0.55-1.0)
+            swing = np.sin(2 * np.pi * foot_phase)
+            ref[i] += self._gait_amp[i] * swing * speed_scale
+        return ref
+
     def _reward_contact_consistency(self):
         """Reward feet contact matching expected trot gait pattern."""
         phase = self._gait_phase()
@@ -264,6 +291,13 @@ class Go1WalkV2Env(Go1BaseEnv):
             if is_stance == is_contact:
                 reward += 1.0
         return reward / 4.0  # normalize to [0, 1]
+
+    def _reward_ref_tracking(self):
+        """Reward tracking the reference gait joint positions."""
+        joint_pos = self.data.qpos[7:19]
+        ref = self._get_ref_joint_pos()
+        err = np.sum((joint_pos - ref) ** 2)
+        return float(np.exp(-err / 0.5))
 
     # ── main reward ────────────────────────────────────────────────────
 
@@ -296,6 +330,7 @@ class Go1WalkV2Env(Go1BaseEnv):
             stumble=self._reward_stumble,
             stand_still=self._reward_stand_still,
             feet_contact_forces=self._reward_feet_contact_forces,
+            ref_tracking=self._reward_ref_tracking,
         )
 
         total = 0.0
