@@ -1,4 +1,4 @@
-"""Keyboard teleoperation for Go2 in MuJoCo viewer.
+"""Keyboard teleoperation for Go2 in MuJoCo viewer with balance control.
 
 Controls:
   W/S     - forward/backward
@@ -13,23 +13,26 @@ Controls:
 import mujoco
 import mujoco.viewer
 import time
-import math
+import numpy as np
 
+from tools.balance_gait import BalanceGait
 from tools.pd_controller import PDController
 from tools.key_state import KeyState
 
-# Home pose
+# Home pose for Go2
 HIP_BASE = 0.0
 THIGH_BASE = 0.8
 CALF_BASE = -1.5
 HOME_QPOS = [HIP_BASE, THIGH_BASE, CALF_BASE] * 4
 
-# Gait parameters
-FREQ = 4.0
-THIGH_AMP = 0.4
-CALF_AMP = 0.25
-HIP_AMP = 0.15
-TROT_PHASES = [0.0, math.pi, math.pi, 0.0]
+
+def get_body_state(data):
+    """Extract body height, pitch, roll from MuJoCo data."""
+    body_z = data.qpos[2]
+    w, x, y, z = data.qpos[3:7]
+    pitch = np.arcsin(np.clip(2 * (w * y - x * z), -1, 1))
+    roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    return body_z, pitch, roll, data.qvel[3], data.qvel[4]
 
 
 def main():
@@ -43,8 +46,8 @@ def main():
             data.qpos[7 + leg * 3 + j] = HOME_QPOS[leg * 3 + j]
     mujoco.mj_forward(model, data)
 
-    ctrl_standing = PDController(n_joints=12, kp=80.0, kd=3.0)
-    ctrl_walking = PDController(n_joints=12, kp=50.0, kd=1.5)
+    ctrl = PDController(n_joints=12, kp=50.0, kd=1.5)
+    gait = BalanceGait(freq=4.0, target_height=0.35)
     keys = KeyState()
 
     print("Controls: W/S=fwd/back  A/D=turn  Q/E=lateral  P=walk/pause  SPACE=stop  R=reset")
@@ -64,31 +67,19 @@ def main():
                 mujoco.mj_forward(model, data)
                 continue
 
-            if walking:
-                t = data.time
-                omega = 2.0 * math.pi * FREQ
-                fwd_offset = vx * 0.15
-                ref = [0.0] * 12
+            body_z, pitch, roll, ang_vel_x, ang_vel_y = get_body_state(data)
 
-                for leg in range(4):
-                    phase = TROT_PHASES[leg]
-                    base = leg * 3
+            ref = gait.compute(
+                t=data.time,
+                vx=vx, vy=vy, yaw_rate=yaw,
+                body_z=body_z,
+                pitch=pitch, roll=roll,
+                ang_vel_x=ang_vel_x, ang_vel_y=ang_vel_y,
+                walking=walking,
+                dt=model.opt.timestep,
+            )
 
-                    # Hip: yaw + lateral
-                    hip = yaw * HIP_AMP
-                    if leg in [0, 2]:
-                        ref[base] = hip - vy * 0.1
-                    else:
-                        ref[base] = -hip + vy * 0.1
-
-                    # Thigh: oscillation + forward bias
-                    ref[base + 1] = THIGH_BASE + fwd_offset + THIGH_AMP * math.sin(omega * t + phase)
-                    # Calf: cos (90° offset)
-                    ref[base + 2] = CALF_BASE + CALF_AMP * math.cos(omega * t + phase)
-
-                ctrl_walking.apply(ref, data)
-            else:
-                ctrl_standing.apply(HOME_QPOS, data)
+            ctrl.apply(ref, data)
 
             mujoco.mj_step(model, data)
             viewer.cam.lookat[:] = data.qpos[:3]
