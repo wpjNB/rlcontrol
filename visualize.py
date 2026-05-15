@@ -17,8 +17,6 @@ try:
     for _ in range(2000):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, _ = env.step(action)
-        env.render()
-        time.sleep(0.01)
         done = terminated or truncated
         reward_sum += reward
         if done:

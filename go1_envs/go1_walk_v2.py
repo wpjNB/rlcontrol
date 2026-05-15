@@ -29,29 +29,34 @@ class Go1WalkV2Env(Go1BaseEnv):
     def __init__(
         self,
         render_mode=None,
+        difficulty=1.0,
         # reward scales
-        tracking_lin_vel_scale=1.0,
-        tracking_ang_vel_scale=0.5,
-        lin_vel_z_scale=-2.0,
-        ang_vel_xy_scale=-0.05,
-        orientation_scale=-1.0,
-        base_height_scale=-30.0,
-        torques_scale=-0.0002,
-        dof_vel_scale=-0.001,
-        dof_acc_scale=-2.5e-7,
-        action_rate_scale=-0.01,
-        collision_scale=-1.0,
+        tracking_lin_vel_scale=2.0,
+        tracking_ang_vel_scale=1.0,
+        lin_vel_z_scale=-1.0,
+        ang_vel_xy_scale=-0.02,
+        orientation_scale=-0.5,
+        base_height_scale=-10.0,
+        torques_scale=-0.0001,
+        dof_vel_scale=-0.0002,
+        dof_acc_scale=-1e-7,
+        action_rate_scale=-0.005,
+        collision_scale=-0.5,
         termination_scale=-2.0,
-        dof_pos_limits_scale=-10.0,
+        dof_pos_limits_scale=-1.0,
         feet_air_time_scale=1.0,
-        stumble_scale=-2.0,
-        stand_still_scale=-1.0,
-        feet_contact_forces_scale=-0.01,
+        stumble_scale=-1.0,
+        stand_still_scale=-0.5,
+        feet_contact_forces_scale=-0.001,
+        contact_consistency_scale=1.0,
         # tracking sigma
         tracking_sigma=0.25,
         **kwargs,
     ):
         super().__init__(xml_file=SCENE_FILE, render_mode=render_mode, **kwargs)
+
+        # Curriculum: 0.0 = stand still with light penalties, 1.0 = full task
+        self._difficulty = float(difficulty)
 
         # Commanded velocity (vx, vy, yaw_rate)
         self._command = np.zeros(3, dtype=np.float32)
@@ -75,6 +80,11 @@ class Go1WalkV2Env(Go1BaseEnv):
         self._feet_air_time = np.zeros(4, dtype=np.float32)
         self._last_contact = np.zeros(4, dtype=bool)
 
+        # Gait phase (trot: diagonal pairs, FR/RL in phase, FL/RR offset by 0.5)
+        self._gait_period = 0.5  # seconds
+        # foot order: FR, FL, RR, RL  (matches FOOT_BODY_NAMES)
+        self._foot_phase_offsets = np.array([0.0, 0.5, 0.5, 0.0])
+
         # Reward scales
         self._scales = dict(
             tracking_lin_vel=tracking_lin_vel_scale,
@@ -94,12 +104,13 @@ class Go1WalkV2Env(Go1BaseEnv):
             stumble=stumble_scale,
             stand_still=stand_still_scale,
             feet_contact_forces=feet_contact_forces_scale,
+            contact_consistency=contact_consistency_scale,
         )
         self._tracking_sigma = tracking_sigma
 
-        # Override obs space: 39 + 3 (commanded_vel)
+        # Override obs space: 39 + 3 (commanded_vel) + 2 (gait phase sin/cos)
         from gymnasium import spaces
-        obs_dim = 42
+        obs_dim = 44
         high = np.inf * np.ones(obs_dim, dtype=np.float32)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
@@ -108,10 +119,15 @@ class Go1WalkV2Env(Go1BaseEnv):
     def _get_obs(self):
         base_obs = super()._get_obs()  # 39d
         cmd = self._command.astype(np.float32)
-        return np.concatenate([base_obs, cmd])
+        phase = self._gait_phase()
+        phase_enc = np.array([np.sin(2 * np.pi * phase), np.cos(2 * np.pi * phase)], dtype=np.float32)
+        return np.concatenate([base_obs, cmd, phase_enc])
 
     def set_command(self, vx: float = 0.0, vy: float = 0.0, yaw_rate: float = 0.0):
         self._command[:] = [vx, vy, yaw_rate]
+
+    def set_difficulty(self, d: float):
+        self._difficulty = float(np.clip(d, 0.0, 1.0))
 
     # ── reward components ──────────────────────────────────────────────
 
@@ -228,7 +244,36 @@ class Go1WalkV2Env(Go1BaseEnv):
                         penalty += (f_mag - 100.0) ** 2
         return penalty
 
+    # ── gait phase ─────────────────────────────────────────────────────
+
+    def _gait_phase(self):
+        """Current gait phase in [0, 1)."""
+        dt = self.frame_skip * self.model.opt.timestep
+        t = self._step_count * dt
+        return (t % self._gait_period) / self._gait_period
+
+    def _reward_contact_consistency(self):
+        """Reward feet contact matching expected trot gait pattern."""
+        phase = self._gait_phase()
+        contact = self._get_foot_contacts()
+        reward = 0.0
+        for i in range(4):
+            foot_phase = (phase + self._foot_phase_offsets[i]) % 1.0
+            is_stance = foot_phase < 0.55
+            is_contact = contact[i] > 0.5
+            if is_stance == is_contact:
+                reward += 1.0
+        return reward / 4.0  # normalize to [0, 1]
+
     # ── main reward ────────────────────────────────────────────────────
+
+    # Penalty terms that get scaled by difficulty
+    _PENALTY_TERMS = frozenset([
+        "lin_vel_z", "ang_vel_xy", "orientation", "base_height",
+        "torques", "dof_vel", "dof_acc", "action_rate",
+        "collision", "dof_pos_limits", "stumble", "stand_still",
+        "feet_contact_forces",
+    ])
 
     def _get_reward(self, obs, action):
         self._last_action = action.copy()
@@ -247,6 +292,7 @@ class Go1WalkV2Env(Go1BaseEnv):
             collision=self._reward_collision,
             dof_pos_limits=self._reward_dof_pos_limits,
             feet_air_time=self._reward_feet_air_time,
+            contact_consistency=self._reward_contact_consistency,
             stumble=self._reward_stumble,
             stand_still=self._reward_stand_still,
             feet_contact_forces=self._reward_feet_contact_forces,
@@ -254,14 +300,19 @@ class Go1WalkV2Env(Go1BaseEnv):
 
         total = 0.0
         self._reward_terms = {}
+        d = self._difficulty
         for name, fn in reward_fns.items():
             val = fn()
-            scaled = self._scales[name] * val
+            scale = self._scales[name]
+            # Scale penalty terms by difficulty; positive rewards stay full
+            if name in self._PENALTY_TERMS and scale < 0:
+                scale *= d
+            scaled = scale * val
             self._reward_terms[name] = scaled
             total += scaled
 
-        # alive bonus
-        total += 1.0
+        # alive bonus (scale up with difficulty to compensate for more penalties)
+        total += 2.0 + 3.0 * d
 
         return float(total)
 
@@ -302,11 +353,12 @@ class Go1WalkV2Env(Go1BaseEnv):
         self._last_contact[:] = False
         self._reward_terms = {}
         obs, info = super().reset(seed=seed, options=options)
-        # Random command after seeding so it's deterministic
+        # Random command scaled by difficulty
+        d = self._difficulty
         self._command[:] = [
-            self.np_random.uniform(0.5, 1.5),
-            self.np_random.uniform(-0.3, 0.3),
-            self.np_random.uniform(-0.5, 0.5),
+            self.np_random.uniform(0.5 * d, 1.5 * d),
+            self.np_random.uniform(-0.3 * d, 0.3 * d),
+            self.np_random.uniform(-0.5 * d, 0.5 * d),
         ]
         # Rebuild obs with the new command
         obs = self._get_obs()

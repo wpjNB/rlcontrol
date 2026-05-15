@@ -144,6 +144,10 @@ class Go1BaseEnv(gym.Env):
         truncated = False  # handled by TimeLimit wrapper
         info = self._get_info()
 
+        # 渲染
+        if self.render_mode is not None:
+            self.render()
+
         return obs, reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
