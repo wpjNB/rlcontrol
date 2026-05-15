@@ -89,6 +89,46 @@ def test_step_length_turning():
     assert right < 0
 
 
+from traditional_control.foot_trajectory import FootTrajectory
+
+
+def test_swing_trajectory_peak():
+    """Swing at midpoint (phase_norm=0.5) should have max height."""
+    traj = FootTrajectory(step_height=0.06)
+    pos = traj.compute(phase_norm=0.5, is_swing=True, step_len=0.1, vy_offset=0.0)
+    assert abs(pos[2] - 0.06) < 0.001
+
+
+def test_swing_trajectory_start_end():
+    """Swing at start/end should be at ground level."""
+    traj = FootTrajectory(step_height=0.06)
+    pos_start = traj.compute(phase_norm=0.0, is_swing=True, step_len=0.1, vy_offset=0.0)
+    pos_end = traj.compute(phase_norm=1.0, is_swing=True, step_len=0.1, vy_offset=0.0)
+    assert abs(pos_start[2]) < 0.001
+    assert abs(pos_end[2]) < 0.001
+
+
+def test_stance_trajectory_ground():
+    """Stance phase should keep foot on ground."""
+    traj = FootTrajectory()
+    pos = traj.compute(phase_norm=0.5, is_swing=False, step_len=0.1, vy_offset=0.0)
+    assert abs(pos[2]) < 0.001
+
+
+def test_step_length_clamping():
+    """Step length should be clamped to max."""
+    traj = FootTrajectory(step_length_max=0.15)
+    pos = traj.compute(phase_norm=0.5, is_swing=True, step_len=1.0, vy_offset=0.0)
+    assert abs(pos[0]) <= 0.076
+
+
+def test_lateral_offset():
+    """vy_offset should appear in y component."""
+    traj = FootTrajectory()
+    pos = traj.compute(phase_norm=0.5, is_swing=True, step_len=0.0, vy_offset=0.05)
+    assert abs(pos[1] - 0.05) < 0.001
+
+
 if __name__ == '__main__':
     test_fk_ik_roundtrip()
     test_ik_standing_pose()
@@ -99,4 +139,9 @@ if __name__ == '__main__':
     test_phase_swing_stance()
     test_step_length_forward()
     test_step_length_turning()
+    test_swing_trajectory_peak()
+    test_swing_trajectory_start_end()
+    test_stance_trajectory_ground()
+    test_step_length_clamping()
+    test_lateral_offset()
     print("All traditional control tests passed!")
