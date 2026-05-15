@@ -51,10 +51,52 @@ def test_fk_standing():
     assert -0.5 < pos[2] < -0.2
 
 
+from traditional_control.gait_phase import GaitPhaseScheduler
+
+
+def test_phase_trot_diagonal_sync():
+    """Trot: FR/RL in phase, FL/RR in phase, offset by pi."""
+    sched = GaitPhaseScheduler(freq=2.0)
+    phases = sched.step(0.0, 0.001)
+    assert abs(phases['FR']['phase'] - 0.0) < 0.01
+    assert abs(phases['FL']['phase'] - np.pi) < 0.01
+    assert abs(phases['RL']['phase'] - np.pi) < 0.01
+    assert abs(phases['RR']['phase'] - 0.0) < 0.01
+
+
+def test_phase_swing_stance():
+    """Phase should correctly identify swing vs stance."""
+    sched = GaitPhaseScheduler(freq=2.0, duty_cycle=0.6)
+    phases = sched.step(0.0, 0.001)
+    assert phases['FR']['is_swing'] == True
+    phases = sched.step(0.25, 0.001)
+    assert phases['FR']['is_swing'] == False
+
+
+def test_step_length_forward():
+    """Step length should scale with vx."""
+    sched = GaitPhaseScheduler(freq=2.0)
+    step = sched.get_step_length(vx=1.0, yaw_rate=0.0, leg='FL')
+    assert abs(step - 0.5) < 0.01
+
+
+def test_step_length_turning():
+    """Turning should create differential step lengths."""
+    sched = GaitPhaseScheduler(freq=2.0)
+    left = sched.get_step_length(vx=0.0, yaw_rate=1.0, leg='FL')
+    right = sched.get_step_length(vx=0.0, yaw_rate=1.0, leg='FR')
+    assert left > 0
+    assert right < 0
+
+
 if __name__ == '__main__':
     test_fk_ik_roundtrip()
     test_ik_standing_pose()
     test_ik_bent_knee()
     test_clamp_joints()
     test_fk_standing()
-    print("All kinematics tests passed!")
+    test_phase_trot_diagonal_sync()
+    test_phase_swing_stance()
+    test_step_length_forward()
+    test_step_length_turning()
+    print("All traditional control tests passed!")
