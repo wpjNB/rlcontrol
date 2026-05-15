@@ -129,6 +129,57 @@ def test_lateral_offset():
     assert abs(pos[1] - 0.05) < 0.001
 
 
+from traditional_control.trot_controller import TrotController
+
+
+def test_standing_output():
+    """Standing (walking=False) should return HOME_QPOS."""
+    ctrl = TrotController()
+    ref = ctrl.compute(t=0.0, vx=0.0, vy=0.0, yaw_rate=0.0,
+                       body_z=0.27, pitch=0.0, roll=0.0,
+                       ang_vel_x=0.0, ang_vel_y=0.0, walking=False, dt=0.002)
+    np.testing.assert_allclose(ref, HOME_QPOS, atol=1e-6)
+
+
+def test_walking_output_shape():
+    """Walking output should be 12d array."""
+    ctrl = TrotController()
+    ref = ctrl.compute(t=0.0, vx=0.5, vy=0.0, yaw_rate=0.0,
+                       body_z=0.27, pitch=0.0, roll=0.0,
+                       ang_vel_x=0.0, ang_vel_y=0.0, walking=True, dt=0.002)
+    assert ref.shape == (12,)
+
+
+def test_walking_differs_from_standing():
+    """Walking output should differ from HOME_QPOS."""
+    ctrl = TrotController()
+    ref = ctrl.compute(t=0.1, vx=0.5, vy=0.0, yaw_rate=0.0,
+                       body_z=0.27, pitch=0.0, roll=0.0,
+                       ang_vel_x=0.0, ang_vel_y=0.0, walking=True, dt=0.002)
+    assert not np.allclose(ref, HOME_QPOS, atol=0.01)
+
+
+def test_fall_recovery():
+    """Large tilt should trigger recovery pose."""
+    ctrl = TrotController()
+    ref = ctrl.compute(t=0.0, vx=0.5, vy=0.0, yaw_rate=0.0,
+                       body_z=0.27, pitch=0.5, roll=0.0,
+                       ang_vel_x=0.0, ang_vel_y=0.0, walking=True, dt=0.002)
+    for leg in range(4):
+        assert ref[leg * 3 + 2] < HOME_QPOS[leg * 3 + 2] + 0.01
+
+
+def test_turn_differential():
+    """Turning should create different hip angles for left vs right legs."""
+    ctrl = TrotController()
+    ref = ctrl.compute(t=0.1, vx=0.0, vy=0.0, yaw_rate=1.0,
+                       body_z=0.27, pitch=0.0, roll=0.0,
+                       ang_vel_x=0.0, ang_vel_y=0.0, walking=True, dt=0.002)
+    left_hip_avg = (ref[0] + ref[6]) / 2
+    right_hip_avg = (ref[3] + ref[9]) / 2
+    assert abs(left_hip_avg - right_hip_avg) > 0.01
+
+
 if __name__ == '__main__':
     test_fk_ik_roundtrip()
     test_ik_standing_pose()
@@ -144,4 +195,9 @@ if __name__ == '__main__':
     test_stance_trajectory_ground()
     test_step_length_clamping()
     test_lateral_offset()
+    test_standing_output()
+    test_walking_output_shape()
+    test_walking_differs_from_standing()
+    test_fall_recovery()
+    test_turn_differential()
     print("All traditional control tests passed!")
