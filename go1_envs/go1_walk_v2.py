@@ -13,7 +13,7 @@ NON_FOOT_BODY_NAMES = [
     "trunk", "FR_hip", "FR_thigh", "FL_hip", "FL_thigh",
     "RR_hip", "RR_thigh", "RL_hip", "RL_thigh",
 ]
-TARGET_BASE_HEIGHT = 0.30
+TARGET_BASE_HEIGHT = 0.27
 
 
 class Go1WalkV2Env(Go1BaseEnv):
@@ -45,7 +45,7 @@ class Go1WalkV2Env(Go1BaseEnv):
         collision_scale=-0.5,
         termination_scale=-2.0,
         dof_pos_limits_scale=-1.0,
-        feet_air_time_scale=2.0,
+        feet_air_time_scale=5.0,
         stumble_scale=-2.0,
         stand_still_scale=-0.5,
         feet_contact_forces_scale=-0.001,
@@ -336,7 +336,7 @@ class Go1WalkV2Env(Go1BaseEnv):
             total += scaled
 
         # alive bonus (scale up with difficulty to compensate for more penalties)
-        total += 2.0 + 3.0 * d
+        total += 1.0 + 3.0 * d
 
         return float(total)
 

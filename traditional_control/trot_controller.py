@@ -42,7 +42,7 @@ class TrotController:
         self,
         freq: float = 2.0,
         duty_cycle: float = 0.6,
-        step_height: float = 0.06,
+        step_height: float = 0.10,
         target_height: float = 0.27,
         tilt_limit: float = 0.35,
     ):
@@ -54,7 +54,7 @@ class TrotController:
 
         # 姿态补偿 PD 增益
         self.kp_pitch = 1.5    # 俯仰补偿增益
-        self.kp_roll = 1.0     # 横滚补偿增益
+        self.kp_roll = 0.4     # 横滚补偿增益
         self.kp_height = 5.0   # 高度补偿增益
 
         # 跌倒恢复状态
@@ -122,7 +122,7 @@ class TrotController:
 
         # --- 步态模式：相位调度 + 足端轨迹 + IK ---
         phases = self.phase.step(t, dt)              # 计算所有腿的相位
-        lateral_offset = self.phase.get_lateral_offset(vy)  # 侧移偏移
+        lateral_step = self.phase.get_lateral_offset(vy)  # 侧移步长
         ref = np.zeros(12)
 
         for leg in LEGS:
@@ -137,23 +137,13 @@ class TrotController:
                 phase_norm=p['phase_norm'],
                 is_swing=p['is_swing'],
                 step_len=step_len,
-                vy_offset=lateral_offset,
+                lateral_step=lateral_step,
             )
 
             # 逆运动学：足端位置 → 关节角
             joints = self.kin.solve(leg, foot_pos)
             joints = self.kin.clamp_joints(leg, joints)  # 裁剪到限位
             ref[idx:idx + 3] = joints
-
-        # --- 转向差速：左右腿髋关节微调 ---
-        # yaw_rate>0 左转时，左腿髋角增大，右腿髋角减小
-        hip_yaw_offset = yaw_rate * 0.05
-        for leg in LEFT_LEGS:
-            idx = LEG_INDICES[leg]
-            ref[idx + 0] += hip_yaw_offset
-        for leg in RIGHT_LEGS:
-            idx = LEG_INDICES[leg]
-            ref[idx + 0] -= hip_yaw_offset
 
         # --- 姿态平衡补偿 ---
         ref = self._apply_balance(ref, pitch, roll, body_z, ang_vel_x, ang_vel_y)
@@ -171,22 +161,22 @@ class TrotController:
         pitch_corr = self.kp_pitch * pitch + 0.3 * ang_vel_y
         for leg in FRONT_LEGS:
             idx = LEG_INDICES[leg]
-            ref[idx + 1] -= pitch_corr * 0.3   # 前腿大腿伸展
-            ref[idx + 2] += pitch_corr * 0.2   # 前腿小腿补偿
+            ref[idx + 1] -= pitch_corr * 0.3   # 前腿大腿
+            ref[idx + 2] += pitch_corr * 0.2   # 前腿小腿
         for leg in REAR_LEGS:
             idx = LEG_INDICES[leg]
-            ref[idx + 1] += pitch_corr * 0.3   # 后腿大腿收缩
+            ref[idx + 1] += pitch_corr * 0.3   # 后腿大腿
             ref[idx + 2] -= pitch_corr * 0.2
 
         # 横滚补偿
-        roll_corr = self.kp_roll * roll + 0.2 * ang_vel_x
+        roll_corr = self.kp_roll * roll
         for leg in RIGHT_LEGS:
             idx = LEG_INDICES[leg]
-            ref[idx + 1] -= roll_corr * 0.2    # 右腿大腿伸展
-            ref[idx + 0] -= roll_corr * 0.1    # 右腿髋调整
+            ref[idx + 1] -= roll_corr * 0.2    # 右腿大腿
+            ref[idx + 0] -= roll_corr * 0.1    # 右腿髋
         for leg in LEFT_LEGS:
             idx = LEG_INDICES[leg]
-            ref[idx + 1] += roll_corr * 0.2    # 左腿大腿收缩
+            ref[idx + 1] += roll_corr * 0.2    # 左腿大腿
             ref[idx + 0] += roll_corr * 0.1
 
         # 高度补偿

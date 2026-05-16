@@ -1,8 +1,8 @@
 """Visualize BalanceGait in MuJoCo viewer.
 
 Controls:
-  W/S     - forward/backward
-  A/D     - turn left/right
+  ↑/↓     - forward/backward
+  ←/→     - turn left/right
   Q/E     - lateral left/right
   P       - toggle walk/pause
   SPACE   - stop and stand still
@@ -41,14 +41,14 @@ def get_body_state(data):
 
 
 def main():
-    model = mujoco.MjModel.from_xml_path("go1_envs/scenes/flat_scene.xml")
+    model = mujoco.MjModel.from_xml_path("mujoco_menagerie/unitree_go2/scene.xml")
     data = mujoco.MjData(model)
 
-    ctrl = PDController(n_joints=12, kp=50.0, kd=1.5)
+    ctrl = PDController(n_joints=12, kp=100.0, kd=1.5)
     gait = BalanceGait(freq=3.0, target_height=0.27)
     keys = KeyState()
 
-    print("Controls: W/S=fwd/back  A/D=turn  Q/E=lateral  P=walk/pause  SPACE=stop  R=reset")
+    print("Controls: ↑/↓=fwd/back  ←/→=turn  Q/E=lateral  (hold to move, release to stop)  P=walk/pause  SPACE=stop  R=reset")
     print("Robot starts standing still.")
 
     with mujoco.viewer.launch_passive(model, data, key_callback=keys.on_key) as viewer:
@@ -79,7 +79,10 @@ def main():
             ctrl.apply(ref, data)
 
             mujoco.mj_step(model, data)
-            viewer.cam.lookat[:] = data.qpos[:3]
+
+            # Smooth camera tracking — lerps toward robot so arrow key adjustments aren't overridden
+            alpha = 0.1
+            viewer.cam.lookat[:] = (1 - alpha) * viewer.cam.lookat[:] + alpha * data.qpos[:3]
             viewer.sync()
 
             # Status line

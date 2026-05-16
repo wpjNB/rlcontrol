@@ -102,7 +102,7 @@ class BalanceGait:
             ref = HOME_QPOS.copy()
 
         # --- Attitude compensation (applies to both walking and standing) ---
-        ref = self._apply_balance(ref, pitch, roll, body_z, ang_vel_x, ang_vel_y)
+        # ref = self._apply_balance(ref, pitch, roll, body_z, ang_vel_x, ang_vel_y)
 
         return ref
 

@@ -50,11 +50,11 @@ GLFW_RELEASE = 0    # 松开
 # ============================================================
 # 速度限制
 # ============================================================
-VX_MAX = 1.5        # 最大前进速度 (m/s)
-VX_MIN = -0.8       # 最大后退速度 (m/s)
-YAW_MAX = 1.5       # 最大转向角速度 (rad/s)
-VY_MAX = 0.5        # 最大侧移速度 (m/s)
-TAU = 0.3           # 速度渐变时间常数 (s)，越大加速越慢
+VX_MAX = 3.5        # 最大前进速度 (m/s)
+VX_MIN = -2.5       # 最大后退速度 (m/s)
+YAW_MAX = 3.5       # 最大转向角速度 (rad/s)
+VY_MAX = 3.5        # 最大侧移速度 (m/s)
+TAU = 0.05           # 速度渐变时间常数 (s)，越大加速越慢
 
 
 class KeyState:
@@ -74,14 +74,27 @@ class KeyState:
         self._pressed = set()   # 当前激活的方向键
         self.reset = False
 
+    # 相反方向键映射
+    _OPPOSITES = {
+        GLFW_KEY_UP: GLFW_KEY_DOWN, GLFW_KEY_DOWN: GLFW_KEY_UP,
+        GLFW_KEY_W: GLFW_KEY_S, GLFW_KEY_S: GLFW_KEY_W,
+        GLFW_KEY_LEFT: GLFW_KEY_RIGHT, GLFW_KEY_RIGHT: GLFW_KEY_LEFT,
+        GLFW_KEY_A: GLFW_KEY_D, GLFW_KEY_D: GLFW_KEY_A,
+        GLFW_KEY_Q: GLFW_KEY_E, GLFW_KEY_E: GLFW_KEY_Q,
+    }
+
     def on_key(self, key: int):
         """GLFW 键盘回调函数。传给 launch_passive(key_callback=...)。"""
         with self._lock:
             if key == GLFW_KEY_R:
                 self.reset = True
+                self._pressed.clear()   # 重置时清除所有方向键
             elif key == GLFW_KEY_SPACE:
                 self._pressed.clear()   # 急停：清除所有方向键
             else:
+                # 清除相反方向键
+                if key in self._OPPOSITES:
+                    self._pressed.discard(self._OPPOSITES[key])
                 self._pressed.add(key)  # 锁定该键
 
     def is_pressed(self, key: int) -> bool:
@@ -132,12 +145,12 @@ def main():
     data = mujoco.MjData(model)
 
     # --- 初始化控制器 ---
-    controller = TrotController(freq=2.0, target_height=0.27)
+    controller = TrotController(freq=6.0, target_height=0.27)
     keys = KeyState()
 
     # PD 控制增益
-    kp = 100.0   # 比例增益（刚度）
-    kd = 1.5     # 微分增益（阻尼）
+    kp = 120.0   # 比例增益（刚度）
+    kd = 2     # 微分增益（阻尼）
 
     # 当前速度（经过渐变平滑）
     vx = 0.0
@@ -187,24 +200,25 @@ def main():
             vy = ramp(vy, vy_target, alpha)
             yaw = ramp(yaw, yaw_target, alpha)
 
-            # 速度接近零时直接归零，避免微小漂移
-            if abs(vx) < 0.01:
+            # 目标为零时，速度接近零则直接归零，避免微小漂移
+            if vx_target == 0.0 and abs(vx) < 0.01:
                 vx = 0.0
-            if abs(vy) < 0.01:
+            if vy_target == 0.0 and abs(vy) < 0.01:
                 vy = 0.0
-            if abs(yaw) < 0.01:
+            if yaw_target == 0.0 and abs(yaw) < 0.01:
                 yaw = 0.0
 
             # 任意方向有速度时才算行走
             walking = abs(vx) > 0.01 or abs(vy) > 0.01 or abs(yaw) > 0.01
 
-            # --- 提取机体状态 ---
+            # --- 提取机体状态 估计器---
             body_z, pitch, roll, ang_vel_x, ang_vel_y = get_body_state(data)
 
             # --- 控制器计算目标关节角 ---
+            # 控制器的 x 方向与世界坐标系相反，取反
             ref = controller.compute(
                 t=data.time,
-                vx=vx, vy=vy, yaw_rate=yaw,
+                vx=-vx, vy=vy, yaw_rate=yaw,
                 body_z=body_z,
                 pitch=pitch, roll=roll,
                 ang_vel_x=ang_vel_x, ang_vel_y=ang_vel_y,

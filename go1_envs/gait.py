@@ -60,30 +60,32 @@ class TrotGait:
         omega = 2.0 * np.pi * self.freq
         ref = np.zeros(12)
 
-        # Velocity → thigh offset (forward lean bias)
-        fwd_offset = vx * 0.15
+        # Velocity modulates thigh sweep amplitude (not just offset).
+        # vx>0: sin+vx bias → larger backward sweep during stance → forward propulsion
+        # vx<0: sin+vx bias → larger forward sweep during stance → backward propulsion
+        vel_amp = 0.4 * vx
 
         for leg in range(4):
             phase = TROT_PHASES[leg]
             base = leg * 3
+            sin_val = np.sin(omega * t + phase)
 
             # Hip: yaw + lateral
-            #   yaw:  right legs positive, left legs negative
-            #   lateral: right legs negative, left legs positive (push body left)
-            hip = yaw_rate * self.hip_amp
+            stance = 0.5 * (1.0 + sin_val)
+            hip_yaw = yaw_rate * self.hip_amp * stance
+            hip_lat = vy * 0.15
             if leg in [0, 2]:  # right legs (FR, RR)
-                ref[base + HIP] = hip - vy * 0.1
+                ref[base + HIP] = hip_yaw - hip_lat
             else:              # left legs (FL, RL)
-                ref[base + HIP] = -hip + vy * 0.1
+                ref[base + HIP] = -hip_yaw + hip_lat
 
-            # Thigh: oscillation + forward bias
+            # Thigh: asymmetric sweep biased by velocity
             ref[base + THIGH] = (
                 HOME_QPOS[base + THIGH]
-                + fwd_offset
-                + self.thigh_amp * np.sin(omega * t + phase)
+                + self.thigh_amp * (sin_val + vel_amp)
             )
 
-            # Calf: cos (90° offset from thigh) for natural leg motion
+            # Calf: matched to thigh
             ref[base + KNEE] = (
                 HOME_QPOS[base + KNEE]
                 + self.calf_amp * np.cos(omega * t + phase)

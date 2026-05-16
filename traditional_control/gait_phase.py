@@ -13,10 +13,10 @@ Trot（对角步态）是最常见的四足步态：
 import numpy as np
 
 # Trot 步态的相位偏移
-# FR 和 RL 同相（0），FL 和 RR 同相（π），形成对角对称
+# FL 和 RR 同相（对角），FR 和 RL 同相（对角），两组相差 π
 TROT_OFFSETS = {
-    'FL': np.pi,   # 左前腿
-    'FR': 0.0,     # 右前腿
+    'FL': 0.0,     # 左前腿
+    'FR': np.pi,   # 右前腿
     'RL': np.pi,   # 左后腿
     'RR': 0.0,     # 右后腿
 }

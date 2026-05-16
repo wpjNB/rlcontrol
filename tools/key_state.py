@@ -12,6 +12,10 @@ GLFW_KEY_E = 69
 GLFW_KEY_R = 82
 GLFW_KEY_P = 80
 GLFW_KEY_SPACE = 32
+GLFW_KEY_UP = 265
+GLFW_KEY_DOWN = 264
+GLFW_KEY_LEFT = 263
+GLFW_KEY_RIGHT = 262
 
 
 class KeyState:
@@ -41,16 +45,16 @@ class KeyState:
     def on_key(self, key: int):
         """GLFW key callback. Pass to launch_passive(key_callback=...)."""
         with self._lock:
-            if key == GLFW_KEY_W:
+            if key == GLFW_KEY_W or key == GLFW_KEY_UP:
                 self.vx = min(self.vx + self._vx_step, self._vx_max)
                 self.walking = True
-            elif key == GLFW_KEY_S:
+            elif key == GLFW_KEY_S or key == GLFW_KEY_DOWN:
                 self.vx = max(self.vx - self._vx_step, self._vx_min)
                 self.walking = True
-            elif key == GLFW_KEY_A:
+            elif key == GLFW_KEY_A or key == GLFW_KEY_LEFT:
                 self.yaw = 1.0
                 self.walking = True
-            elif key == GLFW_KEY_D:
+            elif key == GLFW_KEY_D or key == GLFW_KEY_RIGHT:
                 self.yaw = -1.0
                 self.walking = True
             elif key == GLFW_KEY_Q:

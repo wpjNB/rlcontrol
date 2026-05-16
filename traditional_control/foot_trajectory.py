@@ -14,52 +14,56 @@ class FootTrajectory:
     """笛卡尔空间足端轨迹生成器。
 
     Args:
-        step_height: 最大抬腿高度 (m)，默认 0.06
-        step_length_max: 最大步长 (m)，用于裁剪，默认 0.2
+        step_height: 最大抬腿高度 (m)，默认 0.08
+        step_length_max: 最大步长 (m)，用于裁剪，默认 0.45
+        standing_height: 站立时足端到髋关节的垂直距离 (m)，默认 0.265
     """
 
-    def __init__(self, step_height: float = 0.06, step_length_max: float = 0.2):
+    def __init__(self, step_height: float = 0.08, step_length_max: float = 0.3,
+                 standing_height: float = 0.265):
         self.step_height = step_height
         self.step_length_max = step_length_max
+        self.standing_height = standing_height
 
     def compute(
         self,
         phase_norm: float,
         is_swing: bool,
         step_len: float,
-        vy_offset: float,
+        lateral_step: float,
     ) -> np.ndarray:
         """计算足端目标位置（相对于髋关节）。
 
         摆动相轨迹：
           x = -step_len/2 → +step_len/2  （从前到后线性前摆）
+          y = -lateral_step/2 → +lateral_step/2  （侧移）
           z = step_height * sin(π * t)    （正弦抬腿，中间最高）
 
         支撑相轨迹：
           x = +step_len/2 → -step_len/2  （足端固定，身体前移）
-          z = 0                           （贴地）
+          y = +lateral_step/2 → -lateral_step/2  （侧移）
+          z = -standing_height            （贴地）
 
         Args:
             phase_norm: 当前阶段内的归一化进度 0~1
             is_swing: 是否在摆动相
             step_len: 步长 (m)，正=向前
-            vy_offset: 横向偏移 (m)
+            lateral_step: 侧移步长 (m)，正=向左
 
         Returns:
             [x, y, z] 足端位置（相对于髋关节）
         """
         # 裁剪步长到最大值，防止步子过大
         step_len = np.clip(step_len, -self.step_length_max, self.step_length_max)
+        lateral_step = np.clip(lateral_step, -self.step_length_max, self.step_length_max)
 
         if is_swing:
-            # 摆动相：线性前摆 + 正弦抬腿
             x = -step_len / 2 + step_len * phase_norm
-            z = self.step_height * np.sin(np.pi * phase_norm)
+            y = -lateral_step / 2 + lateral_step * phase_norm
+            z = -self.standing_height + self.step_height * np.sin(np.pi * phase_norm)
         else:
-            # 支撑相：足端固定，身体前移
             x = step_len / 2 - step_len * phase_norm
-            z = 0.0
-
-        y = vy_offset
+            y = lateral_step / 2 - lateral_step * phase_norm
+            z = -self.standing_height
 
         return np.array([x, y, z])
