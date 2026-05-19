@@ -53,8 +53,8 @@ class TrotController:
         self.tilt_limit = tilt_limit
 
         # 姿态补偿 PD 增益
-        self.kp_pitch = 1.5    # 俯仰补偿增益
-        self.kp_roll = 0.4     # 横滚补偿增益
+        self.kp_pitch = 6    # 俯仰补偿增益（临时调大验证极性）
+        self.kp_roll = 0.5     # 横滚补偿增益
         self.kp_height = 5.0   # 高度补偿增益
 
         # 跌倒恢复状态
@@ -108,44 +108,32 @@ class TrotController:
             self._recover_timer = 0.0
 
         # --- 恢复模式：蹲伏 + 反向补偿 ---
-        if self._recovering:
-            self._recover_timer += dt
-            ref = self._recovery_pose(pitch, roll)
-            # 倾斜恢复到 <0.1rad 且持续 0.5s 后退出恢复
-            if tilt < 0.1 and self._recover_timer > self._recover_duration:
-                self._recovering = False
-            return ref
+ 
 
-        # --- 站立模式：返回站立关节角 ---
+        # --- 站立模式：站立关节角 ---
         if not walking:
-            return HOME_QPOS.copy()
+            ref = HOME_QPOS.copy()
+        else:
+            # --- 步态模式：相位调度 + 足端轨迹 + IK ---
+            phases = self.phase.step(t, dt)
+            lateral_step = self.phase.get_lateral_offset(vy)
+            ref = np.zeros(12)
 
-        # --- 步态模式：相位调度 + 足端轨迹 + IK ---
-        phases = self.phase.step(t, dt)              # 计算所有腿的相位
-        lateral_step = self.phase.get_lateral_offset(vy)  # 侧移步长
-        ref = np.zeros(12)
+            for leg in LEGS:
+                idx = LEG_INDICES[leg]
+                p = phases[leg]
+                step_len = self.phase.get_step_length(vx, yaw_rate, leg)
+                foot_pos = self.trajectory.compute(
+                    phase_norm=p['phase_norm'],
+                    is_swing=p['is_swing'],
+                    step_len=step_len,
+                    lateral_step=lateral_step,
+                )
+                joints = self.kin.solve(leg, foot_pos)
+                joints = self.kin.clamp_joints(leg, joints)
+                ref[idx:idx + 3] = joints
 
-        for leg in LEGS:
-            idx = LEG_INDICES[leg]
-            p = phases[leg]
-
-            # 根据速度命令计算该腿的步长
-            step_len = self.phase.get_step_length(vx, yaw_rate, leg)
-
-            # 在笛卡尔空间生成足端目标位置
-            foot_pos = self.trajectory.compute(
-                phase_norm=p['phase_norm'],
-                is_swing=p['is_swing'],
-                step_len=step_len,
-                lateral_step=lateral_step,
-            )
-
-            # 逆运动学：足端位置 → 关节角
-            joints = self.kin.solve(leg, foot_pos)
-            joints = self.kin.clamp_joints(leg, joints)  # 裁剪到限位
-            ref[idx:idx + 3] = joints
-
-        # --- 姿态平衡补偿 ---
+        # --- 姿态平衡补偿（站立和步态都生效） ---
         ref = self._apply_balance(ref, pitch, roll, body_z, ang_vel_x, ang_vel_y)
         return ref
 
@@ -158,15 +146,16 @@ class TrotController:
         - 高度补偿：太低→所有腿伸展，太高→所有腿收缩
         """
         # 俯仰补偿（比例 + 微分）
-        pitch_corr = self.kp_pitch * pitch + 0.3 * ang_vel_y
-        for leg in FRONT_LEGS:
-            idx = LEG_INDICES[leg]
-            ref[idx + 1] -= pitch_corr * 0.3   # 前腿大腿
-            ref[idx + 2] += pitch_corr * 0.2   # 前腿小腿
-        for leg in REAR_LEGS:
-            idx = LEG_INDICES[leg]
-            ref[idx + 1] += pitch_corr * 0.3   # 后腿大腿
-            ref[idx + 2] -= pitch_corr * 0.2
+        # pitch_corr = self.kp_pitch * pitch
+        # for leg in FRONT_LEGS:
+        #     idx = LEG_INDICES[leg]
+        #     ref[idx + 1] -= pitch_corr * 0.3   # 前腿大腿
+        #     ref[idx + 2] += pitch_corr * 0.4   # 前腿小腿
+
+        # for leg in REAR_LEGS:
+        #     idx = LEG_INDICES[leg]
+        #     ref[idx + 1] += pitch_corr * 0.3   # 后腿大腿
+        #     ref[idx + 2] -= pitch_corr * 0.4
 
         # 横滚补偿
         roll_corr = self.kp_roll * roll

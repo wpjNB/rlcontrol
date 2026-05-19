@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Pure Pursuit 动画演示</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0f;
+  color: #e0e0e0;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+h1 {
+  font-size: 28px;
+  font-weight: 300;
+  letter-spacing: 4px;
+  margin-bottom: 4px;
+  color: #fff;
+}
+.subtitle {
+  font-size: 13px;
+  color: #666;
+  letter-spacing: 2px;
+  margin-bottom: 20px;
+}
+.container {
+  display: flex;
+  gap: 30px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+canvas {
+  border: 1px solid #222;
+  border-radius: 4px;
+  background: #0d0d14;
+}
+.panel {
+  width: 280px;
+  background: #111118;
+  border: 1px solid #222;
+  border-radius: 4px;
+  padding: 20px;
+}
+.panel h3 {
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: #555;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+}
+.param {
+  margin-bottom: 14px;
+}
+.param label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
+.param label span { color: #0af; font-family: monospace; }
+.param input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  height: 3px;
+  background: #222;
+  border-radius: 2px;
+  outline: none;
+}
+.param input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #0af;
+  cursor: pointer;
+}
+.legend {
+  margin-top: 20px;
+  border-top: 1px solid #222;
+  padding-top: 16px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #888;
+}
+.legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.legend-line {
+  width: 20px; height: 2px;
+  flex-shrink: 0;
+}
+.formula {
+  margin-top: 20px;
+  border-top: 1px solid #222;
+  padding-top: 16px;
+}
+.formula p {
+  font-size: 11px;
+  color: #555;
+  line-height: 1.8;
+  margin-bottom: 6px;
+}
+.formula code {
+  color: #0af;
+  font-size: 12px;
+  background: #0a0a14;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.btn {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #333;
+  background: #16161e;
+  color: #aaa;
+  font-size: 11px;
+  letter-spacing: 1px;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+}
+.btn:hover { border-color: #0af; color: #0af; }
+.btn.active { border-color: #0af; color: #0af; background: #0a1628; }
+.info-box {
+  margin-top: 20px;
+  border-top: 1px solid #222;
+  padding-top: 16px;
+}
+.info-box p {
+  font-size: 11px;
+  color: #555;
+  line-height: 1.7;
+  margin-bottom: 8px;
+}
+.info-box p strong { color: #888; }
+</style>
+</head>
+<body>
+
+<h1>PURE PURSUIT</h1>
+<p class="subtitle">路径跟踪算法可视化</p>
+
+<div class="container">
+  <canvas id="cv" width="700" height="560"></canvas>
+
+  <div class="panel">
+    <h3>Parameters</h3>
+
+    <div class="param">
+      <label>前瞻距离 L <span id="ldVal">0.50</span></label>
+      <input type="range" id="ld" min="0.15" max="1.5" step="0.01" value="0.5">
+    </div>
+    <div class="param">
+      <label>速度 v <span id="spVal">0.80</span></label>
+      <input type="range" id="sp" min="0.2" max="2.0" step="0.05" value="0.8">
+    </div>
+    <div class="param">
+      <label>路径形状</label>
+    </div>
+    <div class="btn-row">
+      <div class="btn active" data-path="sine">S 曲线</div>
+      <div class="btn" data-path="circle">圆形</div>
+      <div class="btn" data-path="figure8">8 字</div>
+    </div>
+
+    <div class="legend">
+      <h3>Legend</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:#0af"></div>机器人 (当前位置)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f44"></div>前瞻点 (Lookahead Point)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:rgba(255,255,255,0.15)"></div>参考路径</div>
+      <div class="legend-item"><div class="legend-line" style="background:#0af"></div>机器人朝向</div>
+      <div class="legend-item"><div class="legend-line" style="background:#f44; border-top: 2px dashed #f44; height:0"></div>前瞻连线 (L)</div>
+      <div class="legend-item"><div class="legend-line" style="background:rgba(255,200,0,0.4)"></div>转向圆弧 (曲率圆)</div>
+    </div>
+
+    <div class="formula">
+      <h3>Core Formula</h3>
+      <p>曲率: <code>&kappa; = 2&middot;sin(&alpha;) / L</code></p>
+      <p>转向半径: <code>R = L / (2&middot;sin(&alpha;))</code></p>
+      <p>其中 <code>&alpha;</code> 为前瞻连线与朝向的夹角</p>
+    </div>
+
+    <div class="info-box">
+      <h3>How It Works</h3>
+      <p><strong>1.</strong> 在路径上找到距离为 <code>L</code> 的前瞻点</p>
+      <p><strong>2.</strong> 计算机器人朝向与前瞻连线的夹角 <code>&alpha;</code></p>
+      <p><strong>3.</strong> 由 <code>&kappa; = 2sin(&alpha;)/L</code> 得到曲率</p>
+      <p><strong>4.</strong> 沿对应圆弧运动，自然收敛到路径</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+
+// Scale: 1 unit = 200 px
+const SCALE = 200;
+const OX = W / 2, OY = H / 2;
+
+// State
+let lookaheadDist = 0.5;
+let speed = 0.8;
+let pathType = 'sine';
+
+// Robot state
+let rx, ry, ryaw;
+let path = [];
+let pathLen = 0;
+let progress = 0; // distance along path
+let trail = [];
+
+// Generate paths
+function genPath(type) {
+  const pts = [];
+  const N = 500;
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    let x, y;
+    if (type === 'sine') {
+      x = (t - 0.5) * 5;
+      y = Math.sin(t * Math.PI * 3) * 0.8;
+    } else if (type === 'circle') {
+      const a = t * Math.PI * 2;
+      x = Math.cos(a) * 1.5;
+      y = Math.sin(a) * 1.5;
+    } else { // figure8
+      const a = t * Math.PI * 2;
+      x = Math.sin(a) * 1.5;
+      y = Math.sin(a * 2) * 0.8;
+    }
+    pts.push({ x, y });
+  }
+  // Compute cumulative distance and yaw
+  const dist = [0];
+  const yaw = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i].x - pts[i-1].x;
+    const dy = pts[i].y - pts[i-1].y;
+    dist.push(dist[i-1] + Math.hypot(dx, dy));
+    yaw.push(Math.atan2(dy, dx));
+  }
+  // fix first yaw
+  yaw[0] = yaw[1];
+  pathLen = dist[dist.length - 1];
+  return { pts, dist, yaw };
+}
+
+function posAtDist(d) {
+  if (d <= 0) return { x: path.pts[0].x, y: path.pts[0].y, yaw: path.yaw[0] };
+  if (d >= pathLen) return { x: path.pts[path.pts.length-1].x, y: path.pts[path.pts.length-1].y, yaw: path.yaw[path.yaw.length-1] };
+  // binary search
+  let lo = 0, hi = path.dist.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (path.dist[mid] <= d) lo = mid; else hi = mid;
+  }
+  const segLen = path.dist[hi] - path.dist[lo];
+  const t = segLen > 0 ? (d - path.dist[lo]) / segLen : 0;
+  const p0 = path.pts[lo], p1 = path.pts[hi];
+  return {
+    x: p0.x + (p1.x - p0.x) * t,
+    y: p0.y + (p1.y - p0.y) * t,
+    yaw: path.yaw[lo] + angleDiff(path.yaw[lo], path.yaw[hi]) * t
+  };
+}
+
+function angleDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+function toScreen(x, y) {
+  return [OX + x * SCALE, OY - y * SCALE];
+}
+
+// Find lookahead point
+function findLookahead(curDist) {
+  // Search forward along path for point at distance L from robot
+  const cur = posAtDist(curDist);
+  let bestD = curDist + lookaheadDist;
+  // refine: actually find point on path that is exactly lookaheadDist from robot
+  let lo = curDist, hi = Math.min(curDist + lookaheadDist * 2, pathLen);
+  for (let iter = 0; iter < 20; iter++) {
+    const mid = (lo + hi) / 2;
+    const p = posAtDist(mid);
+    const d = Math.hypot(p.x - cur.x, p.y - cur.y);
+    if (d < lookaheadDist) lo = mid; else hi = mid;
+  }
+  const targetD = (lo + hi) / 2;
+  return posAtDist(Math.min(targetD, pathLen));
+}
+
+// Pure pursuit curvature
+function purePursuitCurvature(robot, target) {
+  const dx = target.x - robot.x;
+  const dy = target.y - robot.y;
+  const localX =  Math.cos(robot.yaw) * dx + Math.sin(robot.yaw) * dy;
+  const localY = -Math.sin(robot.yaw) * dx + Math.cos(robot.yaw) * dy;
+  const L = Math.hypot(dx, dy);
+  if (L < 1e-6) return 0;
+  return 2 * localY / (L * L);
+}
+
+// Draw
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  for (let gx = -4; gx <= 4; gx += 0.5) {
+    const [sx] = toScreen(gx, 0);
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+  }
+  for (let gy = -3; gy <= 3; gy += 0.5) {
+    const [, sy] = toScreen(0, gy);
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  const [ax0] = toScreen(-4, 0), [ax1] = toScreen(4, 0);
+  const [, ay0] = toScreen(0, -3), [, ay1] = toScreen(0, 3);
+  ctx.beginPath(); ctx.moveTo(ax0, OY); ctx.lineTo(ax1, OY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(OX, ay0); ctx.lineTo(OX, ay1); ctx.stroke();
+
+  // Reference path
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < path.pts.length; i++) {
+    const [sx, sy] = toScreen(path.pts[i].x, path.pts[i].y);
+    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+
+  // Trail
+  if (trail.length > 1) {
+    ctx.strokeStyle = 'rgba(0,170,255,0.15)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < trail.length; i++) {
+      const [sx, sy] = toScreen(trail[i].x, trail[i].y);
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+  }
+
+  const robot = posAtDist(progress);
+  const target = findLookahead(progress);
+  const kappa = purePursuitCurvature(robot, target);
+  const R = Math.abs(kappa) > 1e-6 ? 1 / Math.abs(kappa) : 1e6;
+
+  // Steering circle
+  if (R < 20) {
+    const sign = kappa > 0 ? 1 : -1;
+    const cx = robot.x - sign * R * Math.sin(robot.yaw);
+    const cy = robot.y + sign * R * Math.cos(robot.yaw);
+    const [scx, scy] = toScreen(cx, cy);
+    const sr = R * SCALE;
+
+    ctx.strokeStyle = 'rgba(255,200,0,0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(scx, scy, sr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Curvature label
+    ctx.fillStyle = 'rgba(255,200,0,0.5)';
+    ctx.font = '11px monospace';
+    ctx.fillText(`R = ${R.toFixed(2)}m`, scx + sr + 8, scy);
+  }
+
+  // Lookahead circle (around robot)
+  const [lrx, lry] = toScreen(robot.x, robot.y);
+  ctx.strokeStyle = 'rgba(255,68,68,0.15)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(lrx, lry, lookaheadDist * SCALE, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Line from robot to lookahead point
+  const [tsx, tsy] = toScreen(target.x, target.y);
+  ctx.strokeStyle = 'rgba(255,68,68,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(lrx, lry);
+  ctx.lineTo(tsx, tsy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Angle arc (alpha)
+  const dx = target.x - robot.x;
+  const dy = target.y - robot.y;
+  const alpha = Math.atan2(dy, dx) - robot.yaw;
+  const normAlpha = Math.atan2(Math.sin(alpha), Math.cos(alpha));
+  const arcR = 30;
+  ctx.strokeStyle = 'rgba(255,200,0,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(lrx, lry, arcR, -robot.yaw, -(robot.yaw + normAlpha), normAlpha > 0);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,200,0,0.7)';
+  ctx.font = '11px monospace';
+  const labelAngle = -robot.yaw - normAlpha / 2;
+  ctx.fillText(`α=${(normAlpha * 180 / Math.PI).toFixed(1)}°`, lrx + (arcR + 10) * Math.cos(labelAngle), lry + (arcR + 10) * Math.sin(labelAngle));
+
+  // Lookahead point
+  ctx.fillStyle = '#f44';
+  ctx.beginPath();
+  ctx.arc(tsx, tsy, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,68,68,0.3)';
+  ctx.beginPath();
+  ctx.arc(tsx, tsy, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Robot heading arrow
+  const hLen = 35;
+  const hx = lrx + hLen * Math.cos(-robot.yaw);
+  const hy = lry + hLen * Math.sin(-robot.yaw);
+  ctx.strokeStyle = '#0af';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(lrx, lry);
+  ctx.lineTo(hx, hy);
+  ctx.stroke();
+  // arrowhead
+  const ah = 8;
+  const a1 = -robot.yaw + 2.7;
+  const a2 = -robot.yaw - 2.7;
+  ctx.fillStyle = '#0af';
+  ctx.beginPath();
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(hx + ah * Math.cos(a1), hy + ah * Math.sin(a1));
+  ctx.lineTo(hx + ah * Math.cos(a2), hy + ah * Math.sin(a2));
+  ctx.closePath();
+  ctx.fill();
+
+  // Robot body
+  ctx.fillStyle = '#0af';
+  ctx.beginPath();
+  ctx.arc(lrx, lry, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(0,170,255,0.2)';
+  ctx.beginPath();
+  ctx.arc(lrx, lry, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Labels
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '11px monospace';
+  ctx.fillText(`κ = ${kappa.toFixed(3)}`, 20, H - 60);
+  ctx.fillText(`v = ${speed.toFixed(2)} m/s`, 20, H - 44);
+  ctx.fillText(`L = ${lookaheadDist.toFixed(2)} m`, 20, H - 28);
+  ctx.fillText(`progress: ${(progress / pathLen * 100).toFixed(0)}%`, 20, H - 12);
+
+  // "L" label on dashed line
+  const mx = (lrx + tsx) / 2, my = (lry + tsy) / 2;
+  ctx.fillStyle = 'rgba(255,68,68,0.8)';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('L', mx + 8, my - 4);
+}
+
+// Update
+let lastTime = 0;
+function update(t) {
+  if (!lastTime) lastTime = t;
+  const dt = Math.min((t - lastTime) / 1000, 0.05);
+  lastTime = t;
+
+  const robot = posAtDist(progress);
+  const target = findLookahead(progress);
+  const kappa = purePursuitCurvature(robot, target);
+
+  // Update robot yaw based on curvature
+  const omega = kappa * speed;
+  ryaw += omega * dt;
+
+  // Move along path
+  progress += speed * dt;
+
+  if (progress >= pathLen) {
+    progress = 0;
+    trail = [];
+  }
+
+  // Add to trail
+  trail.push({ x: robot.x, y: robot.y });
+  if (trail.length > 600) trail.shift();
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function init() {
+  path = genPath(pathType);
+  progress = 0;
+  trail = [];
+  requestAnimationFrame(update);
+}
+
+// Controls
+document.getElementById('ld').addEventListener('input', e => {
+  lookaheadDist = parseFloat(e.target.value);
+  document.getElementById('ldVal').textContent = lookaheadDist.toFixed(2);
+});
+document.getElementById('sp').addEventListener('input', e => {
+  speed = parseFloat(e.target.value);
+  document.getElementById('spVal').textContent = speed.toFixed(2);
+});
+document.querySelectorAll('.btn[data-path]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.btn[data-path]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    pathType = btn.dataset.path;
+    path = genPath(pathType);
+    progress = 0;
+    trail = [];
+  });
+});
+
+init();
+</script>
+</body>
+</html>

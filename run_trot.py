@@ -139,6 +139,140 @@ def ramp(current, target, alpha):
     return current + (target - current) * alpha
 
 
+# ============================================================
+# 足端轨迹记录 & 可视化
+# ============================================================
+_TRAJECTORY_LEN = 10  # 每条腿保留的历史点数
+_TRAJECTORY_STRIDE = 5  # 每隔几帧记录一次
+_foot_trails = {name: [] for name in ['FL', 'FR', 'RL', 'RR']}
+_frame_counter = 0
+
+
+def _get_foot_world_pos(data, leg_name):
+    """获取足端在世界坐标系中的位置（用 calf body 近似）。"""
+    body_id = mujoco.mj_name2id(data.model, mujoco.mjtObj.mjOBJ_BODY, f'{leg_name}_calf')
+    if body_id >= 0:
+        return data.xpos[body_id].copy()
+    return None
+
+
+def draw_visuals(viewer, data, vx, vy, show_axes=True):
+    """在 MuJoCo viewer 中绘制自定义可视化。
+
+    绘制内容：
+    1. 四条腿的足端轨迹（彩色小球）
+    2. 机体速度箭头（从质心出发）
+    3. 关节坐标轴（红=X 绿=Y 蓝=Z）
+    """
+    global _frame_counter
+    _frame_counter += 1
+    scn = viewer.user_scn
+    ngeom = 0
+    eye3 = np.eye(3, dtype=np.float64).flatten()
+    max_geom = len(scn.geoms)
+
+    # --- 1. 足端轨迹（每隔几帧记录一次） ---
+    trail_colors = {
+        'FL': np.array([1, 0, 0, 0.8], dtype=np.float32),
+        'FR': np.array([0, 1, 0, 0.8], dtype=np.float32),
+        'RL': np.array([0, 0, 1, 0.8], dtype=np.float32),
+        'RR': np.array([1, 1, 0, 0.8], dtype=np.float32),
+    }
+    record = (_frame_counter % _TRAJECTORY_STRIDE == 0)
+    for leg_name in ['FL', 'FR', 'RL', 'RR']:
+        if record:
+            foot_pos = _get_foot_world_pos(data, leg_name)
+            if foot_pos is not None:
+                _foot_trails[leg_name].append(foot_pos.copy())
+                if len(_foot_trails[leg_name]) > _TRAJECTORY_LEN:
+                    _foot_trails[leg_name].pop(0)
+
+        trail = _foot_trails[leg_name]
+        color = trail_colors[leg_name]
+        n_pts = len(trail)
+        for i, pos in enumerate(trail):
+            if ngeom >= max_geom:
+                break
+            g = scn.geoms[ngeom]
+            alpha = color[3] * ((i + 1) / max(n_pts, 1))
+            mujoco.mjv_initGeom(
+                g, mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([0.005, 0, 0], dtype=np.float64),
+                pos.astype(np.float64), eye3,
+                np.array([color[0], color[1], color[2], alpha], dtype=np.float32),
+            )
+            ngeom += 1
+
+    # --- 2. 速度箭头 ---
+    body_pos = data.qpos[:3].copy()
+    speed = np.sqrt(vx**2 + vy**2)
+    if speed > 0.01 and ngeom < max_geom:
+        arrow_end = body_pos.copy()
+        arrow_end[0] += vx * 0.3
+        arrow_end[1] += vy * 0.3
+        direction = arrow_end - body_pos
+        d_norm = direction / (np.linalg.norm(direction) + 1e-8)
+        up = np.array([0, 0, 1], dtype=np.float64)
+        if abs(np.dot(d_norm, up)) > 0.99:
+            up = np.array([0, 1, 0], dtype=np.float64)
+        right = np.cross(d_norm, up)
+        right /= np.linalg.norm(right) + 1e-8
+        up = np.cross(right, d_norm)
+        rot = np.column_stack([d_norm, right, up]).flatten()
+
+        g = scn.geoms[ngeom]
+        mujoco.mjv_initGeom(
+            g, mujoco.mjtGeom.mjGEOM_CAPSULE,
+            np.array([0.008, speed * 0.15, 0], dtype=np.float64),
+            ((body_pos + arrow_end) / 2).astype(np.float64), rot,
+            np.array([1, 0.5, 0, 1], dtype=np.float32),
+        )
+        ngeom += 1
+
+    # --- 3. 关节坐标轴（红=X 绿=Y 蓝=Z） ---
+    if show_axes:
+        axis_len = 0.04  # 轴长度 4cm
+        axis_colors = [
+            np.array([1, 0, 0, 1], dtype=np.float32),  # X 红
+            np.array([0, 1, 0, 1], dtype=np.float32),  # Y 绿
+            np.array([0, 0, 1, 1], dtype=np.float32),  # Z 蓝
+        ]
+        for leg in ['FL', 'FR', 'RL', 'RR']:
+            for part in ['hip', 'thigh', 'calf']:
+                body_id = mujoco.mj_name2id(
+                    data.model, mujoco.mjtObj.mjOBJ_BODY, f'{leg}_{part}')
+                if body_id < 0:
+                    continue
+                pos = data.xpos[body_id].astype(np.float64)
+                mat = data.xmat[body_id].reshape(3, 3)  # 旋转矩阵
+                for axis_idx in range(3):  # X, Y, Z
+                    if ngeom >= max_geom:
+                        break
+                    axis_dir = mat[:, axis_idx]  # 世界坐标系下的轴方向
+                    g = scn.geoms[ngeom]
+                    # 用 capsule 表示轴：半径 1mm, 半长 = axis_len/2
+                    # capsule 局部轴是 x 轴，需要旋转对齐
+                    end = pos + axis_dir * axis_len
+                    center = (pos + end) / 2
+                    # 构造旋转矩阵让局部 x 轴对齐 axis_dir
+                    up = np.array([0, 0, 1], dtype=np.float64)
+                    if abs(np.dot(axis_dir, up)) > 0.99:
+                        up = np.array([0, 1, 0], dtype=np.float64)
+                    right = np.cross(axis_dir, up)
+                    right /= np.linalg.norm(right) + 1e-8
+                    up = np.cross(right, axis_dir)
+                    rot_mat = np.column_stack([axis_dir, right, up]).flatten()
+                    mujoco.mjv_initGeom(
+                        g, mujoco.mjtGeom.mjGEOM_CAPSULE,
+                        np.array([0.001, axis_len / 2, 0], dtype=np.float64),
+                        center, rot_mat,
+                        axis_colors[axis_idx],
+                    )
+                    ngeom += 1
+
+    scn.ngeom = ngeom
+
+
 def main():
     # --- 初始化 MuJoCo ---
     model = mujoco.MjModel.from_xml_path("mujoco_menagerie/unitree_go2/scene.xml")
@@ -163,6 +297,9 @@ def main():
     with mujoco.viewer.launch_passive(model, data, key_callback=keys.on_key) as viewer:
         mujoco.mj_resetDataKeyframe(model, data, 0)
         mujoco.mj_forward(model, data)
+
+        # 可视化：接触力箭头
+
 
         while viewer.is_running():
             step_start = time.time()
@@ -215,7 +352,6 @@ def main():
             body_z, pitch, roll, ang_vel_x, ang_vel_y = get_body_state(data)
 
             # --- 控制器计算目标关节角 ---
-            # 控制器的 x 方向与世界坐标系相反，取反
             ref = controller.compute(
                 t=data.time,
                 vx=-vx, vy=vy, yaw_rate=yaw,
@@ -239,6 +375,9 @@ def main():
             # --- 相机跟随（平滑插值） ---
             alpha_cam = 0.1
             viewer.cam.lookat[:] = (1 - alpha_cam) * viewer.cam.lookat[:] + alpha_cam * data.qpos[:3]
+
+            # --- 绘制可视化（轨迹 + 箭头 + 坐标轴） ---
+            draw_visuals(viewer, data, vx, vy, show_axes=True)
             viewer.sync()
 
             # --- 状态显示 ---
